@@ -1,20 +1,22 @@
-from schedule import Schedule, Assignment
-from constants import ROOMS
+from schedule import Schedule, Assignment, initialize_population
+from constants import ROOMS, TIMES
 
 def score_schedule(schedule: Schedule) -> float:
     total = 0.0
 
+    assignments = schedule.assignments
+
     # Rule 1 — Room conflict
-    for i in range(len(schedule.assignments)):
-        for j in range(i + 1, len(schedule.assignments)):
-            a1 = schedule.assignments[i]
-            a2 = schedule.assignments[j]
+    for i in range(len(assignments)):
+        for j in range(i + 1, len(assignments)):
+            a1 = assignments[i]
+            a2 = assignments[j]
             if a1.room == a2.room and a1.time == a2.time:
                 total -= 0.5
                 total -= 0.5
 
     # Rule 2 — Room size
-    for a in schedule.assignments:
+    for a in assignments:
         capacity = ROOMS[a.room]
         enrollment = a.activity["enrollment"]
 
@@ -28,7 +30,7 @@ def score_schedule(schedule: Schedule) -> float:
             total += 0.3
 
     # Rule 3 — Facilitator type
-    for a in schedule.assignments:
+    for a in assignments:
         facilitator = a.facilitator
         preferred = a.activity["preferred"]
         other = a.activity["other"]
@@ -40,40 +42,109 @@ def score_schedule(schedule: Schedule) -> float:
         else:
             total -= 0.1
 
+    # Precompute counts for Rule 4 and 5
+    fac_time_count = {}
+    fac_total_count = {}
+
+    for a in assignments:
+        key = (a.facilitator, a.time)
+        fac_time_count[key] = fac_time_count.get(key, 0) + 1
+        fac_total_count[a.facilitator] = fac_total_count.get(a.facilitator, 0) + 1
+
+    time_index = {t: i for i, t in enumerate(TIMES)}
+
+    # Rule 4 — Facilitator load
+    for a in assignments:
+        ft = fac_time_count[(a.facilitator, a.time)]
+        total_count = fac_total_count[a.facilitator]
+
+        if ft == 1:
+            total += 0.2
+        elif ft > 1:
+            total -= 0.2
+
+        if total_count > 4:
+            total -= 0.5
+        elif a.facilitator == "Tyler":
+            if total_count < 2:
+                total -= 0.4
+        else:
+            if total_count < 3:
+                total -= 0.4
+
+    # Rule 5 — Consecutive time slot penalty for facilitators
+    def is_rb(room):
+        return room.startswith("Roman") or room.startswith("Beach")
+
+    for i in range(len(assignments)):
+        for j in range(i + 1, len(assignments)):
+            a1 = assignments[i]
+            a2 = assignments[j]
+            if a1.facilitator == a2.facilitator:
+                if abs(time_index[a1.time] - time_index[a2.time]) == 1:
+                    total += 0.5
+                    if is_rb(a1.room) != is_rb(a2.room):
+                        total -= 0.4
+
+    # Helper to find assignments by activity name
+    def find(name):
+        for a in assignments:
+            if a.activity["name"] == name:
+                return a
+        return None
+
+    # Rule 6 — SLA101A/B
+    a101a = find("SLA101A")
+    a101b = find("SLA101B")
+    if a101a and a101b:
+        diff = abs(time_index[a101a.time] - time_index[a101b.time])
+        if diff == 0:
+            total -= 0.5
+        elif diff >= 5:
+            total += 0.5
+
+    # Rule 7 — SLA191A/B
+    a191a = find("SLA191A")
+    a191b = find("SLA191B")
+    if a191a and a191b:
+        diff = abs(time_index[a191a.time] - time_index[a191b.time])
+        if diff == 0:
+            total -= 0.5
+        elif diff >= 5:
+            total += 0.5
+
+    # Rule 8 — Cross-section rules
+
+    pairs = [
+        (a101a, a191a),
+        (a101a, a191b),
+        (a101b, a191a),
+        (a101b, a191b),
+    ]
+
+    for p1, p2 in pairs:
+        if p1 and p2:
+            diff = abs(time_index[p1.time] - time_index[p2.time])
+
+            if diff == 0:
+                total -= 0.25
+            elif diff == 1:
+                total += 0.5
+                if is_rb(p1.room) != is_rb(p2.room):
+                    total -= 0.4
+            elif diff == 2:
+                total += 0.25
+
     return total
 
 
 if __name__ == "__main__":
-    a1 = Assignment(
-        activity={"name": "A", "enrollment": 20, "preferred": ["X"], "other": ["Y"]},
-        room="Beach 201",  # capacity 18 -> < enrollment => -0.5
-        time="10 AM",
-        facilitator="X",  # preferred => +0.5
-    )
+    s = initialize_population(1)[0]
+    print(f"Single schedule score: {score_schedule(s)}")
 
-    a2 = Assignment(
-        activity={"name": "B", "enrollment": 10, "preferred": ["X"], "other": ["Y"]},
-        room="Beach 201",  # same room/time as a1 => conflict
-        time="10 AM",
-        facilitator="Y",  # other => +0.2
-    )
+    population = initialize_population(250)
+    scores = [score_schedule(s) for s in population]
 
-    a3 = Assignment(
-        activity={"name": "C", "enrollment": 10, "preferred": ["X"], "other": ["Y"]},
-        room="Frank 119",  # capacity 95 -> > 3x => -0.4
-        time="11 AM",
-        facilitator="Z",  # neither => -0.1
-    )
-
-    s = Schedule([a1, a2, a3])
-
-    # Expected calculation:
-    # Conflicts: a1 & a2 => -1.0 total
-    # Room size: a1 (-0.5), a2 (18 > 1.5*10 => -0.2), a3 (-0.4) => -1.1
-    # Facilitator: a1 (+0.5), a2 (+0.2), a3 (-0.1) => +0.6
-    # Total: -1.0 + (-1.1) + 0.6 = -1.5
-
-    result = score_schedule(s)
-    expected = -1.5
-
-    print(f"Result: {result}, Expected: {expected}")
+    print(f"Min: {min(scores)}")
+    print(f"Max: {max(scores)}")
+    print(f"Avg: {sum(scores)/len(scores)}")
