@@ -1,8 +1,11 @@
-#placeholder
-# from schedule import Schedule, Assignment, initialize_population
-# from fitness import score_schedule
-# from constants import ROOM_NAMES, TIMES, FACILITATORS
 import numpy as np
+from scipy.special import softmax
+from copy import deepcopy
+from schedule import Schedule, Assignment, initialize_population
+from fitness import score_schedule
+from constants import ROOM_NAMES, TIMES, FACILITATORS
+
+rng = np.random.default_rng(np.random.PCG64DXSM())
 
 #selection
 def select(population: list, scores: list[float]) -> tuple:
@@ -17,7 +20,7 @@ def mutate(schedule, lam: float = 0.01):
     raise NotImplementedError("mutate() not yet implemented")
 
 #generational loop
-def run_generation(population: list, scores: list[float], lam: float = 0.01) -> tuple:
+def run_generation(population: list, scores: list[float], lam: float = 0.01, generation: int = 0, prev_avg: float = None) -> tuple:
     raise NotImplementedError("run_generation() not yet implemented")
 
 #stop condition
@@ -32,38 +35,111 @@ def halve_mutation_rate(lam: float, min_lam: float = 0.0001) -> float:
 
 #smoke test
 if __name__ == "__main__":
-    print("ga.py loaded — stub signatures verified")
+    print("=" * 60)
+    print("ga.py — April 15 interface verification")
+    print("=" * 60)
     print()
 
+    #confirm imports resolve against real Member A modules
+    print("[ Import check ]")
+    try:
+        from schedule import Schedule, Assignment, initialize_population
+
+        print("  [OK] schedule.py  — Schedule, Assignment, initialize_population")
+    except ImportError as e:
+        print(f"  [FAIL] schedule.py: {e}")
+
+    try:
+        from fitness import score_schedule
+
+        print("  [OK] fitness.py   — score_schedule")
+    except ImportError as e:
+        print(f"  [FAIL] fitness.py: {e}")
+
+    try:
+        from constants import ROOM_NAMES, TIMES, FACILITATORS
+
+        print(f"  [OK] constants.py — {len(ROOM_NAMES)} rooms, "
+              f"{len(TIMES)} time slots, {len(FACILITATORS)} facilitators")
+    except ImportError as e:
+        print(f"  [FAIL] constants.py: {e}")
+
+    print()
+
+    #confirm Schedule / Assignment fields match
+    print("[ Interface contract — Member A data structures ]")
+    pop = initialize_population(1)
+    s = pop[0]
+    a = s.assignments[0]
+
+    checks = [
+        (hasattr(s, "assignments"), "Schedule.assignments exists"),
+        (isinstance(s.assignments, list), "Schedule.assignments is list"),
+        (hasattr(a, "activity"), "Assignment.activity exists"),
+        (hasattr(a, "room"), "Assignment.room exists"),
+        (hasattr(a, "time"), "Assignment.time exists"),
+        (hasattr(a, "facilitator"), "Assignment.facilitator exists"),
+        (isinstance(a.activity, dict), "Assignment.activity is dict"),
+        ("name" in a.activity, "activity has 'name'"),
+        ("enrollment" in a.activity, "activity has 'enrollment'"),
+        ("preferred" in a.activity, "activity has 'preferred'"),
+        ("other" in a.activity, "activity has 'other'"),
+        (a.room in ROOM_NAMES, f"room '{a.room}' in ROOM_NAMES"),
+        (a.time in TIMES, f"time '{a.time}' in TIMES"),
+        (a.facilitator in FACILITATORS, f"facilitator '{a.facilitator}' in FACILITATORS"),
+    ]
+    for passed, label in checks:
+        print(f"  {'[OK]  ' if passed else '[FAIL]'} {label}")
+
+    print()
+
+    #confirm score_schedule accepts Schedule and returns float
+    print("[ score_schedule() interface ]")
+    score = score_schedule(s)
+    ok = isinstance(score, float)
+    print(f"  {'[OK]  ' if ok else '[FAIL]'} score_schedule(Schedule) -> float  "
+          f"(sample: {score:.4f})")
+    print()
+
+    #stub confirmation
+    print("[ Stub confirmation ]")
     stubs = [
-        ("select",                   lambda: select([], [])),
-        ("crossover",                lambda: crossover(None, None)),
-        ("mutate",                   lambda: mutate(None)),
-        ("run_generation",           lambda: run_generation([], [])),
+        ("select", lambda: select([], [])),
+        ("crossover", lambda: crossover(None, None)),
+        ("mutate", lambda: mutate(None)),
+        ("run_generation", lambda: run_generation([], [])),
         ("check_stopping_condition", lambda: check_stopping_condition(0, 0.0)),
     ]
-
     for name, call in stubs:
         try:
             call()
-            print(f"  [WARN] {name}() did not raise NotImplementedError — check stub body")
-        except NotImplementedError:
-            print(f"  [OK]   {name}() stub confirmed (raises NotImplementedError)")
+            print(f"  [WARN] {name}() did not raise NotImplementedError")
+        except NotImplementedError as e:
+            print(f"  [OK]   {name}() stub — {e}")
         except Exception as e:
-            print(f"  [WARN] {name}() raised unexpected error: {e}")
+            print(f"  [WARN] {name}() unexpected error: {e}")
+    print()
 
+    #halve mutation rate
+    print("[ halve_mutation_rate() ]")
+    cases = [
+        (0.01, 0.005, "normal halve"),
+        (0.001, 0.0005, "normal halve"),
+        (0.0001, 0.0001, "at floor"),
+        (0.00005, 0.0001, "below floor — clamp"),
+    ]
+    for lam_in, expected, label in cases:
+        result = halve_mutation_rate(lam_in)
+        ok = abs(result - expected) < 1e-10
+        print(f"  {'[OK]  ' if ok else '[FAIL]'} {lam_in:.5f} -> {result:.6f}  ({label})")
     print()
-    print("halve_mutation_rate() tests:")
-    print(f"  0.01  -> {halve_mutation_rate(0.01):.6f}  (expect 0.005000)")
-    print(f"  0.001 -> {halve_mutation_rate(0.001):.6f}  (expect 0.000500)")
-    print(f"  0.0001-> {halve_mutation_rate(0.0001):.6f}  (expect 0.000100, floor)")
-    print(f"  0.00005->{halve_mutation_rate(0.00005):.6f}  (expect 0.000100, floor)")
+
+    #population scale fitness check
+    print("[ Population fitness check (N=10) ]")
+    small_pop = initialize_population(10)
+    small_scores = [score_schedule(s) for s in small_pop]
+    print(f"  [OK]   Scored 10 schedules")
+    print(f"         best={max(small_scores):.4f}  "
+          f"avg={sum(small_scores) / len(small_scores):.4f}  "
+          f"worst={min(small_scores):.4f}")
     print()
-    print("Interface contract (agreed with Member A on Apr 14):")
-    print("  select()       receives list[Schedule], list[float]")
-    print("  crossover()    receives Schedule, Schedule — returns Schedule")
-    print("  mutate()       receives Schedule, float    — returns Schedule")
-    print("  run_generation receives list[Schedule], list[float], float")
-    print("                 returns  list[Schedule], dict")
-    print("  Schedule.assignments is list[Assignment]")
-    print("  Assignment fields: .activity (dict), .room (str), .time (str), .facilitator (str)")
