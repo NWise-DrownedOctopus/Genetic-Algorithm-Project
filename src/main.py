@@ -17,8 +17,16 @@ import pygame
 from gui import (
     WIN_W, WIN_H, FPS, TITLE,
     render,
-    # Wireframe fake data — remove when ga.py is ready
-    FAKE_SCHEDULE, FAKE_METRICS, FAKE_HISTORY, _fake_history,
+)
+from schedule import (
+    Schedule, Assignment,
+    random_schedule, initialize_population,
+)
+from fitness import (
+    score_schedule
+)
+from ga import (
+    run_generation
 )
 
 # ── Stub imports (replace with real imports when modules are ready) ────────────
@@ -57,43 +65,78 @@ def make_initial_state():
     }
 
 
-# ── Stub: Generate initial population ────────────────────────────────────────
-def stub_generate_population(state):
-    """
-    Wireframe stub. In final version, calls:
-        pop = initialize_population(N=250, seed=state["seed"])
-        scored = [(s, compute_fitness(s)) for s in pop]
-        best = max(scored, key=lambda x: x[1])[0]
-        ... populate state from best schedule and scored population
-    """
-    state["populated"] = True
-    state["converged"] = False
-    state["generation"] = 0
-    state["history"] = []
-    state["schedule"] = FAKE_SCHEDULE
-    state["metrics"] = FAKE_METRICS
-    return state
-
-
-# ── Stub: Run N generations ───────────────────────────────────────────────────
-def stub_run_generations(state, n):
-    """
-    Wireframe stub. In final version, loops n times calling:
-        population, metrics = run_generation(population, generation, lam)
-        state["history"].append((metrics["best"], metrics["avg"], metrics["worst"]))
-        if check_stopping_condition(state): break
-    """
-    current_len = len(state["history"])
-    state["history"] = _fake_history(current_len + n)
-    state["metrics"] = {
-        **FAKE_METRICS,
-        "generation": current_len + n,
-        "improvement": max(0.0, 2.47 - (current_len + n) * 0.01),
+# ── Generate initial population ────────────────────────────────────────
+def generate_population(state):
+    # Generate initial population and calculate starting scores 
+    population = initialize_population()
+    scores = []
+    for schedule in population:
+        scores.append(score_schedule(schedule))
+        
+    # Store best, average, and worst schedule
+    best_idx = scores.index(max(scores))
+    best_schedule = population[best_idx]     
+    average_score = sum(scores)/len(scores)
+    
+    # Grab data from best schedule
+    schedule_display = [
+        {
+            "activity":    a.activity["name"],
+            "room":        a.room,
+            "time":        a.time,
+            "facilitator": a.facilitator,
+            "score":       0.0,   # per-assignment scores not tracked yet, placeholder
+        }
+        for a in best_schedule.assignments
+    ]
+    
+    # Build initial metrics
+    metrics = {
+        "generation":           0,
+        "population":           len(population),
+        "lam":                  0.01,
+        "best":                 max(scores),
+        "avg":                  average_score,
+        "worst":                min(scores),
+        "improvement":          0.0,
+        "room_conflicts":       0,
+        "facilitator_overload": 0,
+        "size_violations":      0,
     }
-    # Check stub stopping condition
-    if state["metrics"]["generation"] >= 100 and state["metrics"]["improvement"] < 1.0:
-        state["converged"] = True
+    
+    # Update state to reflect data generated
+    state["population"]  = population
+    state["scores"]      = scores
+
+    state["populated"]   = True
+    state["converged"]   = False
+    state["generation"]  = 0
+    state["history"]     = [(max(scores), average_score, min(scores))]
+    state["schedule"]    = schedule_display
+    state["metrics"]     = metrics
+    
     return state
+
+
+# # ── Stub: Run N generations ───────────────────────────────────────────────────
+# def stub_run_generations(state, n):
+#     """
+#     Wireframe stub. In final version, loops n times calling:
+#         population, metrics = run_generation(population, generation, lam)
+#         state["history"].append((metrics["best"], metrics["avg"], metrics["worst"]))
+#         if check_stopping_condition(state): break
+#     """
+#     current_len = len(state["history"])
+#     state["history"] = _fake_history(current_len + n)
+#     state["metrics"] = {
+#         **FAKE_METRICS,
+#         "generation": current_len + n,
+#         "improvement": max(0.0, 2.47 - (current_len + n) * 0.01),
+#     }
+#     # Check stub stopping condition
+#     if state["metrics"]["generation"] >= 100 and state["metrics"]["improvement"] < 1.0:
+#         state["converged"] = True
+#     return state
 
 
 # ── Stub: Export ──────────────────────────────────────────────────────────────
@@ -130,6 +173,13 @@ def handle_events(events, state):
             # R — reset to initial state
             if event.key == pygame.K_r:
                 state = make_initial_state()
+            
+            # G - Start initial generation of poulation
+            if event.key == pygame.K_g:
+                if not state["populated"]:
+                    state = generate_population(state)
+                elif not state["converged"]:
+                    state["running"] = True  # main loop will advance one gen per frame
 
             # T — toggle schedule rows (handled in gui.py in final version)
             # +/- — adjust mutation rate lambda
@@ -156,28 +206,22 @@ def main():
     screen = pygame.display.set_mode((WIN_W, WIN_H))
     pygame.display.set_caption(TITLE)
     clock = pygame.time.Clock()
-
+    
     state = make_initial_state()
-
-    # ── Wireframe demo: auto-populate with fake data so teammates can see
-    # the full UI immediately. Remove this block in final version.
-    WIREFRAME_DEMO = True
-    if WIREFRAME_DEMO:
-        state = stub_generate_population(state)
-        state = stub_run_generations(state, 42)
-
+    
     print(f"Launching {TITLE}")
     print("  [R]       Reset to idle state")
     print("  [SPACE]   Pause / resume")
     print("  [+/-]     Adjust mutation rate λ")
     print("  [ESC]     Quit")
-    print()
-    print("  (Wireframe mode: GA stubs active, no real algorithm running)")
 
     running = True
     while running:
         events = pygame.event.get()
         state, running = handle_events(events, state)
+        
+        if state["running"] and not state["paused"] and not state["converged"]:
+            state = run_generation(state)  # TODO validate that correct data is coming from ga.py
 
         render(screen, state)
         pygame.display.flip()
