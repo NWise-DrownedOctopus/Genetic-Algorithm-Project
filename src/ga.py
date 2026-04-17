@@ -54,7 +54,7 @@ def check_stopping_condition(generation: int, improvement_pct: float,
 def halve_mutation_rate(lam: float, min_lam: float = 0.0001) -> float:
     return max(min_lam, lam / 2)
 
-#smoke test
+#smoke test 3
 if __name__ == "__main__":
     print("=" * 60)
     print("=" * 60)
