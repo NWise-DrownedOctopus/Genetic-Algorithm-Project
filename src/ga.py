@@ -13,15 +13,56 @@ def select(population: list, scores: list[float]) -> tuple:
 
 #crossover
 def crossover(parent_a, parent_b):
-    raise NotImplementedError("crossover() not yet implemented")
+    n = len(parent_a.assignments)
+    k = int(rng.integers(1, n))
+    child_assignments = (deepcopy(parent_a.assignments[:k])
+                         + deepcopy(parent_b.assignments[k:]))
+    return Schedule(child_assignments)
 
 #mutation
 def mutate(schedule, lam: float = 0.01):
-    raise NotImplementedError("mutate() not yet implemented")
+    for a in schedule.assignments:
+        if rng.random() < lam:
+            field = int(rng.integers(0, 3))
+            if field == 0:
+                a.room = str(rng.choice(ROOM_NAMES))
+            elif field == 1:
+                a.time = str(rng.choice(TIMES))
+            else:
+                a.facilitator = str(rng.choice(FACILITATORS))
+    return schedule
 
 #generational loop
 def run_generation(population: list, scores: list[float], lam: float = 0.01, generation: int = 0, prev_avg: float = None) -> tuple:
-    raise NotImplementedError("run_generation() not yet implemented")
+    N = len(population)
+    next_gen = []
+
+    while len(next_gen) < N:
+        a, b = select(population, scores)
+        child = crossover(a, b)
+        mutate(child, lam)
+        next_gen.append(child)
+
+    new_scores = [score_schedule(s) for s in next_gen]
+
+    best = float(max(new_scores))
+    avg = float(sum(new_scores) / N)
+    worst = float(min(new_scores))
+
+    if prev_avg is not None and prev_avg != 0.0:
+        improvement = ((avg - prev_avg) / abs(prev_avg)) * 100
+    else:
+        improvement = 0.0
+
+    metrics = {
+        "best": best,
+        "avg": avg,
+        "worst": worst,
+        "improvement": improvement,
+        "lam": lam,
+        "generation": generation,
+    }
+    return next_gen, metrics
 
 #stop condition
 def check_stopping_condition(generation: int, improvement_pct: float,
