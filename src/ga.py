@@ -9,25 +9,68 @@ rng = np.random.default_rng(np.random.PCG64DXSM())
 
 #selection
 def select(population: list, scores: list[float]) -> tuple:
-    raise NotImplementedError("select() not yet implemented")
+    probs = softmax(scores)
+    idx = rng.choice(len(population), size=2, p=probs)
+    return population[idx[0]], population[idx[1]]
 
 #crossover
 def crossover(parent_a, parent_b):
-    raise NotImplementedError("crossover() not yet implemented")
+    n = len(parent_a.assignments)
+    k = int(rng.integers(1, n))
+    child_assignments = (deepcopy(parent_a.assignments[:k])
+                         + deepcopy(parent_b.assignments[k:]))
+    return Schedule(child_assignments)
 
 #mutation
 def mutate(schedule, lam: float = 0.01):
-    raise NotImplementedError("mutate() not yet implemented")
+    for a in schedule.assignments:
+        if rng.random() < lam:
+            field = int(rng.integers(0, 3))
+            if field == 0:
+                a.room = str(rng.choice(ROOM_NAMES))
+            elif field == 1:
+                a.time = str(rng.choice(TIMES))
+            else:
+                a.facilitator = str(rng.choice(FACILITATORS))
+    return schedule
 
 #generational loop
 def run_generation(population: list, scores: list[float], lam: float = 0.01, generation: int = 0, prev_avg: float = None) -> tuple:
-    raise NotImplementedError("run_generation() not yet implemented")
+    N = len(population)
+    next_gen = []
+
+    while len(next_gen) < N:
+        a, b = select(population, scores)
+        child = crossover(a, b)
+        mutate(child, lam)
+        next_gen.append(child)
+
+    new_scores = [score_schedule(s) for s in next_gen]
+
+    best = float(max(new_scores))
+    avg = float(sum(new_scores) / N)
+    worst = float(min(new_scores))
+
+    if prev_avg is not None and prev_avg != 0.0:
+        improvement = ((avg - prev_avg) / abs(prev_avg)) * 100
+    else:
+        improvement = 0.0
+
+    metrics = {
+        "best": best,
+        "avg": avg,
+        "worst": worst,
+        "improvement": improvement,
+        "lam": lam,
+        "generation": generation,
+    }
+    return next_gen, metrics
 
 #stop condition
 def check_stopping_condition(generation: int, improvement_pct: float,
                               min_generations: int = 100,
                               improvement_threshold: float = 1.0) -> bool:
-    raise NotImplementedError("check_stopping_condition() not yet implemented")
+    return generation >= min_generations and improvement_pct < improvement_threshold
 
 #mutation rate scheduler
 def halve_mutation_rate(lam: float, min_lam: float = 0.0001) -> float:
@@ -36,7 +79,6 @@ def halve_mutation_rate(lam: float, min_lam: float = 0.0001) -> float:
 #smoke test
 if __name__ == "__main__":
     print("=" * 60)
-    print("ga.py — April 15 interface verification")
     print("=" * 60)
     print()
 
@@ -101,23 +143,12 @@ if __name__ == "__main__":
           f"(sample: {score:.4f})")
     print()
 
-    #stub confirmation
-    print("[ Stub confirmation ]")
-    stubs = [
-        ("select", lambda: select([], [])),
-        ("crossover", lambda: crossover(None, None)),
-        ("mutate", lambda: mutate(None)),
-        ("run_generation", lambda: run_generation([], [])),
-        ("check_stopping_condition", lambda: check_stopping_condition(0, 0.0)),
-    ]
-    for name, call in stubs:
-        try:
-            call()
-            print(f"  [WARN] {name}() did not raise NotImplementedError")
-        except NotImplementedError as e:
-            print(f"  [OK]   {name}() stub — {e}")
-        except Exception as e:
-            print(f"  [WARN] {name}() unexpected error: {e}")
+    print("[ check_stopping_condition() ]")
+    assert check_stopping_condition(100, 0.5) == True, "should stop: 100 gens, 0.5% improvement"
+    assert check_stopping_condition(99, 0.5) == False, "should not stop: only 99 gens"
+    assert check_stopping_condition(100, 1.5) == False, "should not stop: improvement too high"
+    assert check_stopping_condition(100, 0.0) == True, "should stop: 0% improvement"
+    print("  [OK]   all stopping condition cases correct")
     print()
 
     #halve mutation rate
@@ -134,12 +165,15 @@ if __name__ == "__main__":
         print(f"  {'[OK]  ' if ok else '[FAIL]'} {lam_in:.5f} -> {result:.6f}  ({label})")
     print()
 
-    #population scale fitness check
-    print("[ Population fitness check (N=10) ]")
-    small_pop = initialize_population(10)
-    small_scores = [score_schedule(s) for s in small_pop]
-    print(f"  [OK]   Scored 10 schedules")
-    print(f"         best={max(small_scores):.4f}  "
-          f"avg={sum(small_scores) / len(small_scores):.4f}  "
-          f"worst={min(small_scores):.4f}")
+    print("[ End-to-end GA run (5 generations, N=50) ]")
+    pop = initialize_population(50)
+    scores = [score_schedule(s) for s in pop]
+    prev_avg = None
+    for gen in range(1, 6):
+        pop, metrics = run_generation(pop, scores, lam=0.01, generation=gen, prev_avg=prev_avg)
+        scores = [score_schedule(s) for s in pop]
+        prev_avg = metrics["avg"]
+        print(
+            f"  Gen {gen}: best={metrics['best']:.4f}  avg={metrics['avg']:.4f}  worst={metrics['worst']:.4f}  improvement={metrics['improvement']:.2f}%")
+    print("  [OK]   GA ran 5 generations without error")
     print()

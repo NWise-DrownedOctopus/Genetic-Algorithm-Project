@@ -1,100 +1,178 @@
 """
 main.py — CS 461 Program 2: Genetic Algorithm Scheduler
-Member C ownership.
+Nicholas Wise ownership.
 
-Entry point. Wires together the GUI (gui.py), the GA engine (ga.py),
-and output (output.py). In the wireframe version, GA and output are
-stubbed out — only the GUI runs.
+Entry point.
 
-Final architecture:
-    main.py owns the game loop and application state.
-    gui.py owns all rendering (receives state, draws it).
-    ga.py owns the algorithm (called by main, returns updated state).
-    output.py owns file export (called by main on user request).
+Application architecture:
+    main.py   — owns the game loop and application state dict.
+    gui.py    — owns all rendering; receives state and mouse_pos, draws it.
+    fitness.py - owns all scoring calculation.
+    schedule.py - owns creating of random schedules to initilize project.
+    ga.py     — owns the GA algorithm; called by advance_generation each frame.
+    output.py — owns file export; called on user request after convergence.
+
+State flow:
+    make_initial_state() → state dict
+    generate_population(state) → state (populated=True)
+    advance_generation(state)  → state (called every frame while running)
+    render(screen, state, mouse_pos) → draws current state each frame
+
+Keybindings:
+    [G]      Generate initial population (or start running after population exists)
+    [SPACE]  Pause / resume the GA loop
+    [T]      Toggle schedule panel between 6 and all 11 activities
+    [R]      Reset to idle state (preserves current seed)
+    [+/-]    Double / halve the mutation rate λ
+    [ESC]    Quit (or cancel an active input field edit)
+
+Mouse:
+    Click Seed field     — edit the RNG seed (takes effect on next Randomize/Generate)
+    Click Gens field     — edit the generation count (unlocked after convergence only)
+    Click any button     — same action as the corresponding keybind
+    Click outside fields — commits the active draft and releases input focus
 """
 
 import pygame
 from gui import (
     WIN_W, WIN_H, FPS, TITLE,
-    render,
+    render, BUTTONS, INPUTS,
 )
-from schedule import (
-    Schedule, Assignment,
-    random_schedule, initialize_population,
-)
-from fitness import (
-    score_schedule
-)
-from ga import (
-    run_generation
-)
-
-# ── Stub imports (replace with real imports when modules are ready) ────────────
-# from constants import ROOMS, TIMES, FACILITATORS, ACTIVITIES
-# from schedule import initialize_population
-# from fitness import compute_fitness
-# from ga import run_generation
-# from output import save_schedule, export_csv, write_log
+from schedule import initialize_population
+from fitness import score_schedule
+from ga import run_generation, halve_mutation_rate
 
 
-# ── Application State ─────────────────────────────────────────────────────────
-def make_initial_state():
+# ── Application State ──────────────────────────────────────────────────────────
+
+def make_initial_state(seed=42):
     """
-    Returns the default application state dict.
-    This is the single source of truth passed to gui.render() each frame.
+    Build and return the default application state dict.
+
+    This is the single source of truth for the entire application.
+    Every subsystem (GUI, GA engine, event handler) reads from and writes
+    to this dict. It is passed to gui.render() each frame unchanged except
+    for whatever the current frame's event handling or GA step modified.
+
+    Args:
+        seed: integer RNG seed to initialise the state with. Defaults to 42.
+              Pass state["seed"] when resetting so the user's chosen seed
+              is preserved across Randomize / [R] resets.
+
+    Returns:
+        dict: fully initialised application state.
     """
     return {
         # UI phase flags
-        "populated":    False,   # has initial population been generated?
-        "running":      False,   # is the GA currently running generations?
-        "converged":    False,   # has stopping condition been met?
-        "paused":       False,   # is the GA paused mid-run?
+        "populated":           False,    # has initial population been generated?
+        "running":             False,    # is the GA currently advancing generations?
+        "converged":           False,    # has the stopping condition been met?
+        "paused":              False,    # is the GA paused mid-run?
+
+        # Input field state
+        "input_focus":         None,     # "seed" | "gens" | None — active text field
+        "seed_draft":          str(seed),# string currently displayed in the seed field
+        "gens_draft":          "100",    # string currently displayed in the gens field
 
         # Config
-        "seed":         42,      # RNG seed
-        "run_gens":     100,     # how many generations to run per [Run] press
+        "seed":                seed,     # committed RNG seed (display only for now —
+                                         # schedule.py must be updated to consume it)
+        "run_gens":            100,      # committed number of generations per run batch
+        "show_all_activities": False,    # [T] toggles between 6 and all 11 rows
 
-        # GA state (populated by ga.py in final version)
-        "population":   [],      # list of Schedule objects
-        "generation":   0,       # current generation count
+        # GA state
+        "population":          [],       # list[Schedule] — current generation
+        "scores":              [],       # list[float]    — parallel fitness scores
+        "generation":          0,        # how many generations have been evaluated
+        "lam":                 0.01,     # mutation rate λ — single source of truth
 
-        # Display data (updated each generation)
-        "schedule":     [],      # best schedule — list of activity dicts
-        "metrics":      {},      # dict of GA metrics for metrics panel
-        "history":      [],      # list of (best, avg, worst) per generation
+        # Display data (updated each generation by advance_generation)
+        "schedule":            [],       # best schedule as list of activity dicts
+        "metrics":             {},       # GA metrics dict for the metrics panel
+        "history":             [],       # list of (best, avg, worst) per generation
     }
 
 
-# ── Generate initial population ────────────────────────────────────────
+# ── Input commit ───────────────────────────────────────────────────────────────
+
+def _commit_input(state):
+    """
+    Parse the currently focused draft field and write its value back to state.
+
+    Called when the user presses Enter, clicks outside the field, or the
+    field loses focus for any other reason. If the draft is empty or
+    non-numeric the field reverts to the last successfully committed value
+    so state is never left with an invalid entry. Focus is always cleared
+    after this call regardless of whether the value was valid.
+
+    Validation rules:
+        seed — any non-empty digit string is accepted (no upper bound).
+        gens — must be a digit string representing an integer >= 1.
+
+    Args:
+        state: application state dict; modified in place.
+    """
+    focus = state["input_focus"]
+
+    if focus == "seed":
+        val = state["seed_draft"].strip()
+        if val.isdigit():
+            state["seed"] = int(val)
+        else:
+            state["seed_draft"] = str(state["seed"])   # revert to last valid
+
+    elif focus == "gens":
+        val = state["gens_draft"].strip()
+        if val.isdigit() and int(val) >= 1:
+            state["run_gens"] = int(val)
+        else:
+            state["gens_draft"] = str(state["run_gens"])  # revert to last valid
+
+    state["input_focus"] = None
+
+
+# ── Generate initial population ────────────────────────────────────────────────
+
 def generate_population(state):
-    # Generate initial population and calculate starting scores 
-    population = initialize_population()
-    scores = []
-    for schedule in population:
-        scores.append(score_schedule(schedule))
-        
-    # Store best, average, and worst schedule
-    best_idx = scores.index(max(scores))
-    best_schedule = population[best_idx]     
-    average_score = sum(scores)/len(scores)
-    
-    # Grab data from best schedule
+    """
+    Generate 250 random schedules, score each one, and populate state.
+
+    Calls initialize_population() from schedule.py to create the initial
+    generation, then scores every schedule using score_schedule() from
+    fitness.py. Extracts the best schedule for display and computes summary
+    metrics for the metrics panel.
+
+    Note: initialize_population() currently uses its own internal PCG RNG
+    and does not consume state["seed"]. For reproducible runs, schedule.py
+    would need to accept a seed argument. This is flagged as a Member A task.
+
+    Args:
+        state: application state dict; modified in place and returned.
+
+    Returns:
+        dict: updated state with populated=True and all GA fields initialised.
+    """
+    population    = initialize_population()
+    scores        = [score_schedule(s) for s in population]
+    best_idx      = scores.index(max(scores))
+    best_schedule = population[best_idx]
+    average_score = sum(scores) / len(scores)
+
     schedule_display = [
         {
             "activity":    a.activity["name"],
             "room":        a.room,
             "time":        a.time,
             "facilitator": a.facilitator,
-            "score":       0.0,   # per-assignment scores not tracked yet, placeholder
+            "score":       0.0,   # per-assignment scores not yet tracked; placeholder
         }
         for a in best_schedule.assignments
     ]
-    
-    # Build initial metrics
+
     metrics = {
         "generation":           0,
         "population":           len(population),
-        "lam":                  0.01,
+        "lam":                  state["lam"],
         "best":                 max(scores),
         "avg":                  average_score,
         "worst":                min(scores),
@@ -103,127 +181,314 @@ def generate_population(state):
         "facilitator_overload": 0,
         "size_violations":      0,
     }
-    
-    # Update state to reflect data generated
+
     state["population"]  = population
     state["scores"]      = scores
-
     state["populated"]   = True
     state["converged"]   = False
     state["generation"]  = 0
     state["history"]     = [(max(scores), average_score, min(scores))]
     state["schedule"]    = schedule_display
     state["metrics"]     = metrics
-    
+
     return state
 
 
-# # ── Stub: Run N generations ───────────────────────────────────────────────────
-# def stub_run_generations(state, n):
-#     """
-#     Wireframe stub. In final version, loops n times calling:
-#         population, metrics = run_generation(population, generation, lam)
-#         state["history"].append((metrics["best"], metrics["avg"], metrics["worst"]))
-#         if check_stopping_condition(state): break
-#     """
-#     current_len = len(state["history"])
-#     state["history"] = _fake_history(current_len + n)
-#     state["metrics"] = {
-#         **FAKE_METRICS,
-#         "generation": current_len + n,
-#         "improvement": max(0.0, 2.47 - (current_len + n) * 0.01),
-#     }
-#     # Check stub stopping condition
-#     if state["metrics"]["generation"] >= 100 and state["metrics"]["improvement"] < 1.0:
-#         state["converged"] = True
-#     return state
+# ── Advance one generation ─────────────────────────────────────────────────────
+
+def advance_generation(state):
+    """
+    Run one generation of the GA and update state with the results.
+
+    Calls Member B's run_generation() with the correct positional signature,
+    unpacks the returned (next_gen, metrics) tuple, re-scores the new
+    population, checks the stopping condition, and writes everything back
+    into the shared state dict.
+
+    Member B's signature:
+        run_generation(
+            population : list[Schedule],
+            scores     : list[float],
+            lam        : float = 0.01,
+            generation : int   = 0,
+            prev_avg   : float = None,
+        ) -> tuple[list[Schedule], dict]
+
+    The returned metrics dict is expected to contain:
+        best, avg, worst, improvement, lam, generation
+
+    Stopping condition (spec requirement):
+        generation >= 100 AND abs(improvement) < 1.0%
+
+    Mutation rate:
+        λ is halved exactly once via halve_mutation_rate() on the first frame
+        the stopping condition is met, allowing fine-tuning after convergence.
+        state["lam"] is the single source of truth; metrics["lam"] is synced
+        from it rather than the other way around.
+
+    Violation counts (room_conflicts, facilitator_overload, size_violations)
+    are carried forward from the previous generation until Member A wires
+    live values into the state dict.
+
+    Args:
+        state: application state dict; modified in place and returned.
+
+    Returns:
+        dict: updated state with new population, scores, metrics, and history.
+    """
+    prev_avg = state["metrics"].get("avg") if state["metrics"] else None
+
+    next_gen, metrics = run_generation(
+        population=state["population"],
+        scores=state["scores"],
+        lam=state["lam"],
+        generation=state["generation"] + 1,
+        prev_avg=prev_avg,
+    )
+
+    new_scores    = [score_schedule(s) for s in next_gen]
+    best_idx      = new_scores.index(max(new_scores))
+    best_schedule = next_gen[best_idx]
+
+    schedule_display = [
+        {
+            "activity":    a.activity["name"],
+            "room":        a.room,
+            "time":        a.time,
+            "facilitator": a.facilitator,
+            "score":       0.0,
+        }
+        for a in best_schedule.assignments
+    ]
+
+    gen         = state["generation"] + 1
+    improvement = metrics.get("improvement", 0.0)
+    converged   = gen >= 100 and abs(improvement) < 1.0
+
+    if converged and not state["converged"]:
+        state["lam"] = halve_mutation_rate(state["lam"])
+
+    prev_metrics = state.get("metrics", {})
+    metrics.update({
+        "population":           len(next_gen),
+        "lam":                  state["lam"],
+        "room_conflicts":       prev_metrics.get("room_conflicts", 0),
+        "facilitator_overload": prev_metrics.get("facilitator_overload", 0),
+        "size_violations":      prev_metrics.get("size_violations", 0),
+    })
+
+    state["population"]  = next_gen
+    state["scores"]      = new_scores
+    state["generation"]  = gen
+    state["converged"]   = converged
+    state["schedule"]    = schedule_display
+    state["metrics"]     = metrics
+    state["history"].append((metrics["best"], metrics["avg"], metrics["worst"]))
+
+    return state
 
 
-# ── Stub: Export ──────────────────────────────────────────────────────────────
-def stub_export_schedule(state):
-    """In final version, calls output.save_schedule(state['schedule'])"""
+# ── Export stubs ───────────────────────────────────────────────────────────────
+
+def stub_export_schedule():
+    """
+    Placeholder for schedule file export.
+
+    Will be replaced with a call to output.save_schedule(state["schedule"])
+    once Member B implements output.py. Only reachable via UI after convergence.
+
+    """
     print("[STUB] Would export schedule to output/best_schedule.txt")
 
 
-def stub_export_csv(state):
-    """In final version, calls output.export_csv(state['history'])"""
+def stub_export_csv():
+    """
+    Placeholder for fitness history CSV export.
+
+    Will be replaced with a call to output.export_csv(state["history"])
+    once Member B implements output.py. Only reachable via UI after convergence.
+
+    """
     print("[STUB] Would export fitness history to output/fitness_history.csv")
 
 
-# ── Event handling ────────────────────────────────────────────────────────────
+# ── Event handling ─────────────────────────────────────────────────────────────
+
 def handle_events(events, state):
     """
-    Process keyboard and window events.
-    Returns updated state and a running bool.
+    Process all pygame events for one frame and update state accordingly.
+
+    Input field focus model:
+        Clicking a field loads its current committed value into the draft
+        string and sets input_focus. While a field is focused:
+          - digit keys append to the draft string
+          - Backspace trims the last character
+          - Enter commits the draft via _commit_input()
+          - Escape cancels (reverts draft) and releases focus
+          - all hotkeys (G, T, SPACE, R, +/-) are suppressed so typed
+            digits cannot accidentally trigger other actions
+        Clicking outside any input field commits the active draft and
+        releases focus. The Gens field ignores clicks before convergence.
+
+    Button guards mirror the visual disable states in gui.py:
+        Randomize        — blocked while running
+        Generate         — blocked after population exists
+        Run              — blocked until populated; blocked while running or converged
+        Export buttons   — blocked until converged
+
+    Args:
+        events: list of pygame.Event objects from pygame.event.get().
+        state : application state dict; modified in place.
+
+    Returns:
+        tuple[dict, bool]: (updated state, keep_running).
+                           keep_running is False when the app should exit.
     """
     for event in events:
         if event.type == pygame.QUIT:
             return state, False
 
+        # ── Mouse ──────────────────────────────────────────────────────────────
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            pos = event.pos
+            clicked_input = False
+
+            if INPUTS["seed"].collidepoint(pos):
+                state["input_focus"] = "seed"
+                state["seed_draft"]  = str(state["seed"])
+                clicked_input = True
+
+            if INPUTS["gens"].collidepoint(pos):
+                if state.get("converged"):
+                    state["input_focus"] = "gens"
+                    state["gens_draft"]  = str(state["run_gens"])
+                clicked_input = True   # consume click even when locked
+
+            # Clicking outside any input commits the active draft
+            if not clicked_input and state["input_focus"]:
+                _commit_input(state)
+
+            # Buttons — only fire if no input field was just focused
+            if not clicked_input:
+                if BUTTONS["generate"].collidepoint(pos):
+                    if not state["populated"]:
+                        state = generate_population(state)
+                    elif not state["running"] and not state["converged"]:
+                        state["running"] = True
+
+                if BUTTONS["randomize"].collidepoint(pos):
+                    if not state["running"]:
+                        state = make_initial_state(seed=state["seed"])
+
+                if BUTTONS["run"].collidepoint(pos):
+                    if (state["populated"] and not state["running"]
+                            and not state["converged"]):
+                        state["running"] = True
+
+                if BUTTONS["export_sched"].collidepoint(pos):
+                    if state["converged"]:
+                        stub_export_schedule(state)
+
+                if BUTTONS["export_csv"].collidepoint(pos):
+                    if state["converged"]:
+                        stub_export_csv(state)
+
+        # ── Keyboard ──────────────────────────────────────────────────────────
         if event.type == pygame.KEYDOWN:
-            # ESC — quit
-            if event.key == pygame.K_ESCAPE:
-                return state, False
 
-            # SPACE — pause / resume (only meaningful when GA is running)
-            if event.key == pygame.K_SPACE:
-                if state["populated"]:
-                    state["paused"] = not state["paused"]
+            if state["input_focus"]:
+                # Route all keys to the active input field
+                if event.key == pygame.K_RETURN:
+                    _commit_input(state)
 
-            # R — reset to initial state
-            if event.key == pygame.K_r:
-                state = make_initial_state()
-            
-            # G - Start initial generation of poulation
-            if event.key == pygame.K_g:
-                if not state["populated"]:
-                    state = generate_population(state)
-                elif not state["converged"]:
-                    state["running"] = True  # main loop will advance one gen per frame
+                elif event.key == pygame.K_ESCAPE:
+                    # Cancel — revert draft to last committed value
+                    if state["input_focus"] == "seed":
+                        state["seed_draft"] = str(state["seed"])
+                    elif state["input_focus"] == "gens":
+                        state["gens_draft"] = str(state["run_gens"])
+                    state["input_focus"] = None
 
-            # T — toggle schedule rows (handled in gui.py in final version)
-            # +/- — adjust mutation rate lambda
-            if event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
-                if "lam" in state["metrics"]:
-                    state["metrics"]["lam"] = min(0.5, state["metrics"]["lam"] * 2)
+                elif event.key == pygame.K_BACKSPACE:
+                    draft_key = state["input_focus"] + "_draft"
+                    state[draft_key] = state[draft_key][:-1]
 
-            if event.key == pygame.K_MINUS:
-                if "lam" in state["metrics"]:
-                    state["metrics"]["lam"] = max(0.0001, state["metrics"]["lam"] / 2)
+                elif event.unicode.isdigit():
+                    draft_key = state["input_focus"] + "_draft"
+                    state[draft_key] += event.unicode
 
-        # ── Mouse click handling (button regions) ────────────────────────────
-        # TODO: replace with proper Button class hit detection in final version
-        # For now, stub actions are triggered by keyboard shortcuts only.
-        # In the final version, map each pygame.Rect button from gui.py to
-        # its corresponding action here.
+                # All other keys consumed — hotkeys suppressed during editing
+
+            else:
+                # Normal hotkeys when no field is focused
+                if event.key == pygame.K_ESCAPE:
+                    return state, False
+
+                if event.key == pygame.K_SPACE:
+                    if state["populated"]:
+                        state["paused"] = not state["paused"]
+
+                if event.key == pygame.K_r:
+                    state = make_initial_state(seed=state["seed"])
+
+                if event.key == pygame.K_g:
+                    if not state["populated"]:
+                        state = generate_population(state)
+                    elif not state["running"] and not state["converged"]:
+                        state["running"] = True
+
+                if event.key == pygame.K_t:
+                    if state["populated"]:
+                        state["show_all_activities"] = not state["show_all_activities"]
+
+                if event.key in (pygame.K_PLUS, pygame.K_EQUALS):
+                    state["lam"] = min(0.5, state["lam"] * 2)
+
+                if event.key == pygame.K_MINUS:
+                    state["lam"] = max(0.0001, state["lam"] / 2)
 
     return state, True
 
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
+# ── Main loop ──────────────────────────────────────────────────────────────────
+
 def main():
+    """
+    Initialise pygame and run the application event loop.
+
+    Each frame:
+        1. Collect all pending pygame events.
+        2. Pass them to handle_events() to update state.
+        3. If the GA is running and not paused, advance one generation.
+        4. Render the current state to the screen.
+        5. Cap the frame rate at FPS (60).
+        
+    """
     pygame.init()
     screen = pygame.display.set_mode((WIN_W, WIN_H))
     pygame.display.set_caption(TITLE)
     clock = pygame.time.Clock()
-    
+
     state = make_initial_state()
-    
+
     print(f"Launching {TITLE}")
-    print("  [R]       Reset to idle state")
+    print("  [G]       Generate initial population  (or click Generate Population)")
     print("  [SPACE]   Pause / resume")
+    print("  [T]       Toggle 6 / all activities in schedule panel")
+    print("  [R]       Reset to idle state  (or click Randomize)")
     print("  [+/-]     Adjust mutation rate λ")
-    print("  [ESC]     Quit")
+    print("  [ESC]     Quit  (or cancel active input field)")
 
     running = True
     while running:
         events = pygame.event.get()
         state, running = handle_events(events, state)
-        
-        if state["running"] and not state["paused"] and not state["converged"]:
-            state = run_generation(state)  # TODO validate that correct data is coming from ga.py
 
-        render(screen, state)
+        if (state["running"] and not state["paused"]
+                and not state["converged"] and state["populated"]):
+            state = advance_generation(state)
+
+        render(screen, state, pygame.mouse.get_pos())
         pygame.display.flip()
         clock.tick(FPS)
 
