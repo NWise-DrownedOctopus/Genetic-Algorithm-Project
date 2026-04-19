@@ -151,15 +151,14 @@ def advance_generation(state):
     converged = gen >= 100 and abs(improvement) < 1.0
  
     # Halve mutation rate once converged to allow fine-tuning
-    lam = state["lam"]
     if converged and not state["converged"]:
-        lam = halve_mutation_rate(lam)
+        state["lam"] = halve_mutation_rate(state["lam"])
  
     # Carry violation counts forward until Member A supplies live values
     prev_metrics = state.get("metrics", {})
     metrics.update({
         "population":           len(next_gen),
-        "lam":                  lam,
+        "lam":                  state["lam"],
         "room_conflicts":       prev_metrics.get("room_conflicts", 0),
         "facilitator_overload": prev_metrics.get("facilitator_overload", 0),
         "size_violations":      prev_metrics.get("size_violations", 0),
@@ -168,7 +167,6 @@ def advance_generation(state):
     state["population"]  = next_gen
     state["scores"]      = new_scores
     state["generation"]  = gen
-    state["lam"]         = lam
     state["converged"]   = converged
     state["schedule"]    = schedule_display
     state["metrics"]     = metrics
@@ -217,13 +215,9 @@ def handle_events(events, state):
  
             if event.key in (pygame.K_PLUS, pygame.K_EQUALS):
                 state["lam"] = min(0.5, state["lam"] * 2)
-                if state["metrics"]:
-                    state["metrics"]["lam"] = state["lam"]
- 
+
             if event.key == pygame.K_MINUS:
                 state["lam"] = max(0.0001, state["lam"] / 2)
-                if state["metrics"]:
-                    state["metrics"]["lam"] = state["lam"]
  
     return state, True
 
