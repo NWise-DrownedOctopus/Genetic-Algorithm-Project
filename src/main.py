@@ -40,6 +40,7 @@ def make_initial_state():
         "running":      False,   # is the GA currently running generations?
         "converged":    False,   # has stopping condition been met?
         "paused":       False,   # is the GA paused mid-run?
+        "show_all_activities": False,   # T toggles 6 vs all 11 in schedule panel
 
         # Config
         "seed":         42,      # RNG seed
@@ -206,6 +207,10 @@ def handle_events(events, state):
  
             if event.key == pygame.K_r:
                 state = make_initial_state()
+                
+            if event.key == pygame.K_t:
+                if state["populated"]:
+                    state["show_all_activities"] = not state["show_all_activities"]
  
             if event.key == pygame.K_g:
                 if not state["populated"]:
@@ -233,6 +238,7 @@ def main():
     
     print(f"Launching {TITLE}")
     print("  [G]       Generate initial population")
+    print("  [T]       Toggle 6 / all activities in schedule panel")
     print("  [SPACE]   Pause / resume")
     print("  [R]       Reset to idle state")
     print("  [+/-]     Adjust mutation rate λ")

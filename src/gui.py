@@ -347,7 +347,8 @@ def render_schedule(surf, state):
                      (inner_x, inner_y), (inner_x + inner_w, inner_y))
     inner_y += 6
 
-    for i, row in enumerate(schedule):
+    display = schedule if state.get("show_all_activities") else schedule[:6]
+    for i, row in enumerate(display):
         if inner_y + row_h > SCHED_RECT.bottom - 6:
             break
         bg_col = C["panel"] if i % 2 == 0 else (30, 36, 52)
