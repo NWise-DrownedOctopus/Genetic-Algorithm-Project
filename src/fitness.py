@@ -2,6 +2,17 @@ from schedule import Schedule, Assignment, initialize_population
 from constants import ROOMS, TIMES
 
 def score_schedule(schedule: Schedule) -> float:
+    """Compute total fitness score for a schedule.
+
+    Applies rules for room conflicts, room size, facilitator type,
+    facilitator load, consecutive assignments, and SLA constraints.
+
+    Args:
+        schedule (Schedule): Schedule to evaluate.
+
+    Returns:
+        float: Total fitness score.
+    """
     total = 0.0
 
     assignments = schedule.assignments
@@ -74,6 +85,7 @@ def score_schedule(schedule: Schedule) -> float:
 
     # Rule 5 — Consecutive time slot penalty for facilitators
     def is_rb(room):
+        """Check if a room is in Roman or Beach buildings."""
         return room.startswith("Roman") or room.startswith("Beach")
 
     for i in range(len(assignments)):
@@ -88,6 +100,7 @@ def score_schedule(schedule: Schedule) -> float:
 
     # Helper to find assignments by activity name
     def find(name):
+        """Find assignment by activity name."""
         for a in assignments:
             if a.activity["name"] == name:
                 return a
@@ -140,9 +153,11 @@ def score_schedule(schedule: Schedule) -> float:
 
 if __name__ == "__main__":
     def check(name, result, expected):
+        """Compare result to expected and print PASS/FAIL."""
         print(f"{name}: Result: {result}  Expected: {expected}  {'PASS' if abs(result - expected) < 1e-6 else 'FAIL'}")
 
     def act(name, enrollment=40, preferred=None, other=None):
+        """Create activity dictionary."""
         return {"name": name, "enrollment": enrollment,
                 "preferred": preferred or [], "other": other or []}
 
