@@ -19,23 +19,14 @@ from gui import (
     render,
 )
 from schedule import (
-    Schedule, Assignment,
-    random_schedule, initialize_population,
+    initialize_population,
 )
 from fitness import (
     score_schedule
 )
 from ga import (
-    run_generation
+    run_generation, halve_mutation_rate
 )
-
-# ── Stub imports (replace with real imports when modules are ready) ────────────
-# from constants import ROOMS, TIMES, FACILITATORS, ACTIVITIES
-# from schedule import initialize_population
-# from fitness import compute_fitness
-# from ga import run_generation
-# from output import save_schedule, export_csv, write_log
-
 
 # ── Application State ─────────────────────────────────────────────────────────
 def make_initial_state():
@@ -56,7 +47,9 @@ def make_initial_state():
 
         # GA state (populated by ga.py in final version)
         "population":   [],      # list of Schedule objects
+        "scores":       [],      # fitness scores, parallel to population
         "generation":   0,       # current generation count
+        "lam":          0.01,    # current mutation rate
 
         # Display data (updated each generation)
         "schedule":     [],      # best schedule — list of activity dicts
@@ -75,7 +68,7 @@ def generate_population(state):
         
     # Store best, average, and worst schedule
     best_idx = scores.index(max(scores))
-    best_schedule = population[best_idx]     
+    best_schedule = population[best_idx]      
     average_score = sum(scores)/len(scores)
     
     # Grab data from best schedule
@@ -94,7 +87,7 @@ def generate_population(state):
     metrics = {
         "generation":           0,
         "population":           len(population),
-        "lam":                  0.01,
+        "lam":                  state["lam"],
         "best":                 max(scores),
         "avg":                  average_score,
         "worst":                min(scores),
@@ -118,25 +111,70 @@ def generate_population(state):
     return state
 
 
-# # ── Stub: Run N generations ───────────────────────────────────────────────────
-# def stub_run_generations(state, n):
-#     """
-#     Wireframe stub. In final version, loops n times calling:
-#         population, metrics = run_generation(population, generation, lam)
-#         state["history"].append((metrics["best"], metrics["avg"], metrics["worst"]))
-#         if check_stopping_condition(state): break
-#     """
-#     current_len = len(state["history"])
-#     state["history"] = _fake_history(current_len + n)
-#     state["metrics"] = {
-#         **FAKE_METRICS,
-#         "generation": current_len + n,
-#         "improvement": max(0.0, 2.47 - (current_len + n) * 0.01),
-#     }
-#     # Check stub stopping condition
-#     if state["metrics"]["generation"] >= 100 and state["metrics"]["improvement"] < 1.0:
-#         state["converged"] = True
-#     return state
+# ── Advance one generation ─────────────────────────────────────────────────────
+def advance_generation(state):
+    """
+    Calls run_generation() with the correct signature and
+    unpacks its return value back into the shared state dict.
+
+    """
+    prev_avg = state["metrics"].get("avg") if state["metrics"] else None
+ 
+    next_gen, metrics = run_generation(
+        population=state["population"],
+        scores=state["scores"],
+        lam=state["lam"],
+        generation=state["generation"] + 1,
+        prev_avg=prev_avg,
+    )
+ 
+    # Re-score the new generation so state["scores"] stays in sync
+    new_scores = [score_schedule(s) for s in next_gen]
+ 
+    best_idx = new_scores.index(max(new_scores))
+    best_schedule = next_gen[best_idx]
+ 
+    schedule_display = [
+        {
+            "activity":    a.activity["name"],
+            "room":        a.room,
+            "time":        a.time,
+            "facilitator": a.facilitator,
+            "score":       0.0,
+        }
+        for a in best_schedule.assignments
+    ]
+ 
+    # Check stopping condition: >= 100 gens AND improvement < 1%
+    gen = state["generation"] + 1
+    improvement = metrics.get("improvement", 0.0)
+    converged = gen >= 100 and abs(improvement) < 1.0
+ 
+    # Halve mutation rate once converged to allow fine-tuning
+    lam = state["lam"]
+    if converged and not state["converged"]:
+        lam = halve_mutation_rate(lam)
+ 
+    # Carry violation counts forward until Member A supplies live values
+    prev_metrics = state.get("metrics", {})
+    metrics.update({
+        "population":           len(next_gen),
+        "lam":                  lam,
+        "room_conflicts":       prev_metrics.get("room_conflicts", 0),
+        "facilitator_overload": prev_metrics.get("facilitator_overload", 0),
+        "size_violations":      prev_metrics.get("size_violations", 0),
+    })
+ 
+    state["population"]  = next_gen
+    state["scores"]      = new_scores
+    state["generation"]  = gen
+    state["lam"]         = lam
+    state["converged"]   = converged
+    state["schedule"]    = schedule_display
+    state["metrics"]     = metrics
+    state["history"].append((metrics["best"], metrics["avg"], metrics["worst"]))
+ 
+    return state
 
 
 # ── Stub: Export ──────────────────────────────────────────────────────────────
@@ -150,7 +188,7 @@ def stub_export_csv(state):
     print("[STUB] Would export fitness history to output/fitness_history.csv")
 
 
-# ── Event handling ────────────────────────────────────────────────────────────
+# ── Event handling ─────────────────────────────────────────────────────────────
 def handle_events(events, state):
     """
     Process keyboard and window events.
@@ -159,44 +197,34 @@ def handle_events(events, state):
     for event in events:
         if event.type == pygame.QUIT:
             return state, False
-
+ 
         if event.type == pygame.KEYDOWN:
-            # ESC — quit
             if event.key == pygame.K_ESCAPE:
                 return state, False
-
-            # SPACE — pause / resume (only meaningful when GA is running)
+ 
             if event.key == pygame.K_SPACE:
                 if state["populated"]:
                     state["paused"] = not state["paused"]
-
-            # R — reset to initial state
+ 
             if event.key == pygame.K_r:
                 state = make_initial_state()
-            
-            # G - Start initial generation of poulation
+ 
             if event.key == pygame.K_g:
                 if not state["populated"]:
                     state = generate_population(state)
-                elif not state["converged"]:
-                    state["running"] = True  # main loop will advance one gen per frame
-
-            # T — toggle schedule rows (handled in gui.py in final version)
-            # +/- — adjust mutation rate lambda
-            if event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
-                if "lam" in state["metrics"]:
-                    state["metrics"]["lam"] = min(0.5, state["metrics"]["lam"] * 2)
-
+                elif not state["running"] and not state["converged"]:
+                    state["running"] = True
+ 
+            if event.key in (pygame.K_PLUS, pygame.K_EQUALS):
+                state["lam"] = min(0.5, state["lam"] * 2)
+                if state["metrics"]:
+                    state["metrics"]["lam"] = state["lam"]
+ 
             if event.key == pygame.K_MINUS:
-                if "lam" in state["metrics"]:
-                    state["metrics"]["lam"] = max(0.0001, state["metrics"]["lam"] / 2)
-
-        # ── Mouse click handling (button regions) ────────────────────────────
-        # TODO: replace with proper Button class hit detection in final version
-        # For now, stub actions are triggered by keyboard shortcuts only.
-        # In the final version, map each pygame.Rect button from gui.py to
-        # its corresponding action here.
-
+                state["lam"] = max(0.0001, state["lam"] / 2)
+                if state["metrics"]:
+                    state["metrics"]["lam"] = state["lam"]
+ 
     return state, True
 
 
@@ -210,8 +238,9 @@ def main():
     state = make_initial_state()
     
     print(f"Launching {TITLE}")
-    print("  [R]       Reset to idle state")
+    print("  [G]       Generate initial population")
     print("  [SPACE]   Pause / resume")
+    print("  [R]       Reset to idle state")
     print("  [+/-]     Adjust mutation rate λ")
     print("  [ESC]     Quit")
 
@@ -220,8 +249,8 @@ def main():
         events = pygame.event.get()
         state, running = handle_events(events, state)
         
-        if state["running"] and not state["paused"] and not state["converged"]:
-            state = run_generation(state)  # TODO validate that correct data is coming from ga.py
+        if state["running"] and not state["paused"] and not state["converged"] and state["populated"]:
+            state = advance_generation(state)
 
         render(screen, state)
         pygame.display.flip()
