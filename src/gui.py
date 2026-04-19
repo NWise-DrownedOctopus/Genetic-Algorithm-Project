@@ -5,6 +5,12 @@ Member C ownership.
 Handles all pygame-ce rendering: window, chart, schedule panel,
 metrics panel, and control bar. Receives live data from ga.py
 via main.py each generation.
+
+Public API consumed by main.py:
+    render(surf, state, mouse_pos)  — draw everything, called once per frame
+    BUTTONS                         — dict of pygame.Rect for clickable buttons
+    INPUTS                          — dict of pygame.Rect for editable text fields
+    WIN_W, WIN_H, FPS, TITLE        — window configuration constants
 """
 
 import pygame
@@ -31,6 +37,7 @@ METRICS_RECT = pygame.Rect(SCHED_RECT.right + PADDING, LOWER_Y, METRICS_W, LOWER
 STATUS_RECT  = pygame.Rect(0, WIN_H - BOTTOM_BAR_H, WIN_W, BOTTOM_BAR_H)
 
 # ── Button & Input rects — shared with main.py for hit-testing ───────────────
+# All positions are traced from the incrementing x variable in render_control_bar.
 # cy = CTRL_BAR_H // 2 = 26
 # Buttons: 26px tall, y = cy - 13 = 13
 # Inputs:  24px tall, y = cy - 12 = 14
@@ -84,7 +91,15 @@ C = {
 # ── Helper drawing utilities ──────────────────────────────────────────────────
 
 def draw_panel(surf, rect, title=None, title_icon=None):
-    """Draw a rounded panel with optional header label."""
+    """
+    Draw a rounded dark panel with an optional header bar.
+
+    Args:
+        surf       : pygame surface to draw onto.
+        rect       : pygame.Rect defining the panel bounds.
+        title      : optional string label rendered in the header bar.
+        title_icon : optional emoji/character prepended to the title label.
+    """
     pygame.draw.rect(surf, C["panel"], rect, border_radius=6)
     pygame.draw.rect(surf, C["panel_border"], rect, width=1, border_radius=6)
     if title:
@@ -100,9 +115,17 @@ def draw_panel(surf, rect, title=None, title_icon=None):
 
 def draw_button(surf, rect, label, style="normal", icon=None, hovered=False):
     """
-    Draw a styled button.
-    style  : normal | accent | disabled | danger
-    hovered: lightens background on mouse-over; ignored for disabled buttons.
+    Draw a styled clickable button.
+
+    Args:
+        surf   : pygame surface to draw onto.
+        rect   : pygame.Rect defining the button bounds.
+        label  : text string displayed on the button face.
+        style  : one of "normal" | "accent" | "disabled" | "danger".
+                 Controls background colour and text opacity.
+        icon   : optional character prepended to the label with spacing.
+        hovered: when True, lightens the background to indicate mouse-over.
+                 Has no effect when style is "disabled".
     """
     color_map = {
         "normal":   C["btn_hover"]        if hovered else C["btn"],
@@ -121,9 +144,21 @@ def draw_button(surf, rect, label, style="normal", icon=None, hovered=False):
 
 def draw_text_input(surf, rect, value, focused=False, locked=False):
     """
-    Draw an editable text input field.
-    focused: highlights border in accent colour and appends a cursor character.
-    locked : dims the field and border to signal it is not editable.
+    Draw an editable single-line text input field.
+
+    Visual states:
+        locked  — dimmed background and muted border; field is not interactive.
+        focused — accent-coloured border; a pipe character "|" is appended to
+                  the value string to simulate a cursor.
+        default — standard border; no cursor.
+
+    Args:
+        surf   : pygame surface to draw onto.
+        rect   : pygame.Rect defining the field bounds.
+        value  : string currently displayed in the field (the draft value).
+        focused: True when this field has keyboard focus.
+        locked : True when the field should not accept input (e.g. Gens before
+                 convergence). Overrides focused styling.
     """
     if locked:
         border_color = C["text_muted"]
@@ -140,7 +175,6 @@ def draw_text_input(surf, rect, value, focused=False, locked=False):
 
     pygame.draw.rect(surf, bg, rect, border_radius=4)
     pygame.draw.rect(surf, border_color, rect, width=1, border_radius=4)
-
     display = value + "|" if focused else value
     _draw_text(surf, display, rect.x + 8, rect.centery, "sm",
                text_color, center_y=True)
@@ -148,11 +182,27 @@ def draw_text_input(surf, rect, value, focused=False, locked=False):
 
 def _draw_text(surf, text, x, y, size="md", color=None, center=False,
                center_y=False, bold=False):
+    """
+    Render a text string onto a surface using Segoe UI.
+
+    Args:
+        surf    : pygame surface to draw onto.
+        text    : value to render; will be converted to str if needed.
+        x, y    : top-left anchor (or centre anchor when center/center_y=True).
+        size    : one of "xs" | "sm" | "md" | "lg" | "xl" | "xxl".
+        color   : RGB tuple; defaults to C["text"] if None.
+        center  : if True, x is treated as the horizontal centre.
+        center_y: if True, y is treated as the vertical centre.
+        bold    : if True, renders with bold weight.
+
+    Returns:
+        int: pixel width of the rendered text surface.
+    """
     color = color or C["text"]
     sizes = {"xs": 11, "sm": 13, "md": 15, "lg": 18, "xl": 22, "xxl": 28}
-    font = pygame.font.SysFont("Segoe UI", sizes.get(size, 14), bold=bold)
+    font  = pygame.font.SysFont("Segoe UI", sizes.get(size, 14), bold=bold)
     surf_t = font.render(str(text), True, color)
-    rx = x - surf_t.get_width() // 2 if center else x
+    rx = x - surf_t.get_width()  // 2 if center   else x
     ry = y - surf_t.get_height() // 2 if center_y else y
     surf.blit(surf_t, (rx, ry))
     return surf_t.get_width()
@@ -162,9 +212,24 @@ def _draw_text(surf, text, x, y, size="md", color=None, center=False,
 
 def render_control_bar(surf, state, mouse_pos):
     """
-    Top control bar: seed input, gens input, and all action buttons.
-    mouse_pos is passed in each frame to compute per-button hover state.
-    Disabled buttons never show hover regardless of mouse position.
+    Render the top control bar containing all interactive controls.
+
+    Contains (left to right): app title, seed input, Randomize button,
+    Generate Population button, Gens input, Run Generations button,
+    Export Schedule button, Export CSV button.
+
+    Button enable/disable rules:
+        Randomize        — disabled while GA is running.
+        Generate         — accent style before first population; disabled after.
+        Run Generations  — enabled only when populated, not running, not converged.
+        Export buttons   — enabled only after convergence.
+        Gens input       — locked until convergence (spec requires >= 100 gens first).
+
+    Args:
+        surf      : pygame surface to draw onto.
+        state     : application state dict from main.py.
+        mouse_pos : current (x, y) from pygame.mouse.get_pos(); used to compute
+                    per-button hover highlights each frame.
     """
     pygame.draw.rect(surf, C["header"], CTRL_RECT)
     pygame.draw.line(surf, C["panel_border"],
@@ -173,7 +238,6 @@ def render_control_bar(surf, state, mouse_pos):
     x  = 12
     cy = CTRL_BAR_H // 2
 
-    # App title
     _draw_text(surf, "GA Scheduler", x, cy, "md", C["accent"],
                center_y=True, bold=True)
     x += 110
@@ -181,7 +245,6 @@ def render_control_bar(surf, state, mouse_pos):
     pygame.draw.line(surf, C["divider"], (x, 8), (x, CTRL_BAR_H - 8))
     x += 12
 
-    # Seed label + editable input
     _draw_text(surf, "Seed:", x, cy, "sm", C["text_dim"], center_y=True)
     x += 42
     draw_text_input(surf, INPUTS["seed"],
@@ -190,7 +253,6 @@ def render_control_bar(surf, state, mouse_pos):
                     locked=False)
     x += 80
 
-    # Randomize — disabled while GA is running
     rand_style   = "disabled" if state.get("running") else "normal"
     rand_hovered = rand_style != "disabled" and BUTTONS["randomize"].collidepoint(mouse_pos)
     draw_button(surf, BUTTONS["randomize"], "Randomize",
@@ -200,7 +262,6 @@ def render_control_bar(surf, state, mouse_pos):
     pygame.draw.line(surf, C["divider"], (x, 8), (x, CTRL_BAR_H - 8))
     x += 12
 
-    # Generate Population — accent until populated, disabled after
     gen_style   = "disabled" if state.get("populated") else "accent"
     gen_hovered = gen_style != "disabled" and BUTTONS["generate"].collidepoint(mouse_pos)
     draw_button(surf, BUTTONS["generate"], "Generate Population",
@@ -210,7 +271,6 @@ def render_control_bar(surf, state, mouse_pos):
     pygame.draw.line(surf, C["divider"], (x, 8), (x, CTRL_BAR_H - 8))
     x += 12
 
-    # Gens label + editable input (locked until converged)
     _draw_text(surf, "Gens:", x, cy, "sm", C["text_dim"], center_y=True)
     x += 40
     gens_locked = not state.get("converged", False)
@@ -220,7 +280,6 @@ def render_control_bar(surf, state, mouse_pos):
                     locked=gens_locked)
     x += 56
 
-    # Run Generations — disabled until populated and not already running
     can_run     = (state.get("populated") and not state.get("running")
                    and not state.get("converged"))
     run_style   = "normal" if can_run else "disabled"
@@ -232,7 +291,6 @@ def render_control_bar(surf, state, mouse_pos):
     pygame.draw.line(surf, C["divider"], (x, 8), (x, CTRL_BAR_H - 8))
     x += 12
 
-    # Export buttons — only active after convergence
     exp_style     = "normal" if state.get("converged") else "disabled"
     sched_hovered = exp_style != "disabled" and BUTTONS["export_sched"].collidepoint(mouse_pos)
     csv_hovered   = exp_style != "disabled" and BUTTONS["export_csv"].collidepoint(mouse_pos)
@@ -243,7 +301,21 @@ def render_control_bar(surf, state, mouse_pos):
 
 
 def render_chart(surf, state):
-    """Fitness line chart: best (green), avg (blue), worst (red)."""
+    """
+    Render the fitness line chart showing best, average, and worst scores
+    over all generations run so far.
+
+    Reads state["history"], a list of (best, avg, worst) tuples appended
+    each generation by advance_generation() in main.py. Displays a placeholder
+    message if history is empty.
+
+    Y-axis auto-scales to the min/max values in history with 0.5 padding.
+    X-axis spans generation 0 to the latest generation.
+
+    Args:
+        surf : pygame surface to draw onto.
+        state: application state dict from main.py.
+    """
     draw_panel(surf, CHART_RECT, title="Fitness Over Generations", title_icon="📈")
 
     legend_items = [("Best", C["chart_best"]),
@@ -277,6 +349,7 @@ def render_chart(surf, state):
     n        = len(history)
 
     def px(i, val):
+        """Map a (generation index, fitness value) pair to pixel coordinates."""
         gx = inner.x + int(i / max(n - 1, 1) * inner.w)
         gy = inner.bottom - int((val - mn) / span_y * inner.h)
         return gx, gy
@@ -302,7 +375,23 @@ def render_chart(surf, state):
 
 
 def render_schedule(surf, state):
-    """Schedule panel: table of activities, toggled between 6 and all 11."""
+    """
+    Render the best schedule panel as a formatted table.
+
+    Displays activity name, room, time slot, facilitator, and per-row score.
+    Score column is colour-coded: green >= 0.5, yellow >= 0, red < 0.
+
+    The number of rows shown is controlled by state["show_all_activities"]:
+        False (default) — shows the first 6 activities.
+        True            — shows all 11 activities.
+    A hint label in the header reminds the user of the [T] toggle key.
+
+    Rows are clipped if they would overflow the panel bottom.
+
+    Args:
+        surf : pygame surface to draw onto.
+        state: application state dict from main.py.
+    """
     draw_panel(surf, SCHED_RECT, title="Best Schedule", title_icon="📋")
 
     schedule = state.get("schedule", [])
@@ -364,13 +453,32 @@ def render_schedule(surf, state):
 
 
 def render_metrics(surf, state):
-    """Metrics panel: GA stats, fitness values, violations."""
+    """
+    Render the metrics panel showing GA statistics, fitness values,
+    and constraint violation counts.
+
+    Sections:
+        GA STATUS  — current generation, population size, mutation rate λ.
+        FITNESS    — best, average, worst scores and generation-to-generation
+                     improvement percentage.
+        VIOLATIONS — room conflicts, facilitator overload, room size violations.
+                     Values are green when zero, red when non-zero.
+        OVERALL    — sum of per-activity scores from the best schedule.
+
+    Violation counts are carried forward from the previous generation until
+    Member A wires live values into the state dict.
+
+    Args:
+        surf : pygame surface to draw onto.
+        state: application state dict from main.py.
+    """
     draw_panel(surf, METRICS_RECT, title="Metrics", title_icon="📊")
 
     mx = METRICS_RECT.x + 14
     my = METRICS_RECT.y + 38
 
     def row(label, value, val_color=None):
+        """Render a label-value pair, right-aligning the value."""
         nonlocal my
         _draw_text(surf, label, mx, my, "sm", C["text_dim"], center_y=True)
         font  = pygame.font.SysFont("Segoe UI", 13)
@@ -382,12 +490,14 @@ def render_metrics(surf, state):
         my += 24
 
     def divider():
+        """Draw a horizontal rule between metric sections."""
         nonlocal my
         pygame.draw.line(surf, C["divider"],
                          (mx, my + 2), (METRICS_RECT.right - 14, my + 2))
         my += 12
 
     def section(label):
+        """Render a section heading in accent colour."""
         nonlocal my
         my += 6
         _draw_text(surf, label, mx, my, "sm", C["accent"], bold=True)
@@ -430,7 +540,20 @@ def render_metrics(surf, state):
 
 
 def render_status_bar(surf, state):
-    """Bottom status bar: convergence state + keyboard hints."""
+    """
+    Render the bottom status bar.
+
+    Left side shows the current GA phase as a coloured dot indicator:
+        Neutral (grey)  — no population generated yet.
+        Converging (amber) — GA is actively running generations.
+        Converged (green)  — stopping condition has been met.
+
+    Right side shows a compact keyboard shortcut reference.
+
+    Args:
+        surf : pygame surface to draw onto.
+        state: application state dict from main.py.
+    """
     pygame.draw.rect(surf, C["status_bar"], STATUS_RECT)
     pygame.draw.line(surf, C["panel_border"],
                      (0, STATUS_RECT.y), (WIN_W, STATUS_RECT.y))
@@ -458,8 +581,18 @@ def render_status_bar(surf, state):
 
 def render(surf, state, mouse_pos):
     """
-    Render all panels. Called once per frame from main.py.
-    mouse_pos: current (x, y) from pygame.mouse.get_pos(), used for hover state.
+    Render the complete application UI for one frame.
+
+    Clears the surface and draws all five panels in order:
+    control bar, fitness chart, schedule table, metrics panel, status bar.
+    Called once per frame from the main loop in main.py.
+
+    Args:
+        surf      : pygame display surface.
+        state     : application state dict from main.py — the single source
+                    of truth for all rendered values.
+        mouse_pos : current (x, y) from pygame.mouse.get_pos().
+                    Passed to render_control_bar to compute button hover states.
     """
     surf.fill(C["bg"])
     render_control_bar(surf, state, mouse_pos)
