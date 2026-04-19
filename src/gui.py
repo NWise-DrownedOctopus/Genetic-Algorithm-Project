@@ -3,10 +3,8 @@ gui.py — CS 461 Program 2: Genetic Algorithm Scheduler
 Member C ownership.
 
 Handles all pygame-ce rendering: window, chart, schedule panel,
-metrics panel, and control bar. In the final implementation, this
-module receives live data from ga.py via main.py each generation.
-
-Wireframe version: all panels present, buttons visual-only, no live data.
+metrics panel, and control bar. Receives live data from ga.py
+via main.py each generation.
 """
 
 import pygame
@@ -17,22 +15,32 @@ WIN_W, WIN_H = 1100, 860
 FPS = 60
 TITLE = "CS 461 — Genetic Algorithm Scheduler"
 
-# Panel rects (x, y, w, h)
-CTRL_BAR_H = 52          # top control bar
-BOTTOM_BAR_H = 36        # status bar at bottom
-CHART_H = 260            # fitness chart height
+CTRL_BAR_H = 52
+BOTTOM_BAR_H = 36
+CHART_H = 260
 PADDING = 10
 
-CTRL_RECT       = pygame.Rect(0,            0,             WIN_W, CTRL_BAR_H)
-CHART_RECT      = pygame.Rect(PADDING,      CTRL_BAR_H + PADDING,
-                               WIN_W - PADDING*2, CHART_H)
-LOWER_Y         = CTRL_BAR_H + PADDING + CHART_H + PADDING
-LOWER_H         = WIN_H - LOWER_Y - BOTTOM_BAR_H - PADDING
-SCHED_W         = 620
-METRICS_W       = WIN_W - SCHED_W - PADDING*3
-SCHED_RECT      = pygame.Rect(PADDING,      LOWER_Y, SCHED_W,    LOWER_H)
-METRICS_RECT    = pygame.Rect(SCHED_RECT.right + PADDING, LOWER_Y, METRICS_W, LOWER_H)
-STATUS_RECT     = pygame.Rect(0, WIN_H - BOTTOM_BAR_H, WIN_W, BOTTOM_BAR_H)
+CTRL_RECT    = pygame.Rect(0,       0,                       WIN_W, CTRL_BAR_H)
+CHART_RECT   = pygame.Rect(PADDING, CTRL_BAR_H + PADDING,   WIN_W - PADDING*2, CHART_H)
+LOWER_Y      = CTRL_BAR_H + PADDING + CHART_H + PADDING
+LOWER_H      = WIN_H - LOWER_Y - BOTTOM_BAR_H - PADDING
+SCHED_W      = 620
+METRICS_W    = WIN_W - SCHED_W - PADDING*3
+SCHED_RECT   = pygame.Rect(PADDING, LOWER_Y, SCHED_W, LOWER_H)
+METRICS_RECT = pygame.Rect(SCHED_RECT.right + PADDING, LOWER_Y, METRICS_W, LOWER_H)
+STATUS_RECT  = pygame.Rect(0, WIN_H - BOTTOM_BAR_H, WIN_W, BOTTOM_BAR_H)
+
+# ── Button rects — shared with main.py for hit-testing ───────────────────────
+# Positions traced from render_control_bar's incrementing x variable.
+# cy = CTRL_BAR_H // 2 = 26; all buttons are 26px tall, y = cy - 13 = 13.
+_CY = CTRL_BAR_H // 2
+BUTTONS = {
+    "randomize":    pygame.Rect(256, _CY - 13, 88,  26),
+    "generate":     pygame.Rect(364, _CY - 13, 160, 26),
+    "run":          pygame.Rect(640, _CY - 13, 110, 26),
+    "export_sched": pygame.Rect(770, _CY - 13, 118, 26),
+    "export_csv":   pygame.Rect(896, _CY - 13, 104, 26),
+}
 
 # ── Colour Palette ────────────────────────────────────────────────────────────
 C = {
@@ -54,6 +62,7 @@ C = {
     "btn":          (42,  50,  72),
     "btn_hover":    (58,  70,  102),
     "btn_accent":   (52,  100, 200),
+    "btn_accent_hover": (68, 118, 220),
     "btn_disabled": (30,  35,  50),
     "btn_text":     (200, 208, 228),
     "divider":      (38,  44,  62),
@@ -63,51 +72,6 @@ C = {
     "neutral":      (70,  80,  108),
     "violation":    (255, 110, 80),
 }
-
-# ── Fake wireframe data ───────────────────────────────────────────────────────
-FAKE_SCHEDULE = [
-    {"activity": "SLA101A",  "room": "Roman 201",  "time": "10 AM", "facilitator": "Glen",     "score":  0.8},
-    {"activity": "SLA101B",  "room": "Loft 206",   "time": "2 PM",  "facilitator": "Lock",     "score":  0.5},
-    {"activity": "SLA191A",  "room": "Frank 119",  "time": "11 AM", "facilitator": "Banks",    "score":  0.6},
-    {"activity": "SLA191B",  "room": "Beach 301",  "time": "3 PM",  "facilitator": "Numen",    "score": -0.1},
-    {"activity": "SLA201",   "room": "James 325",  "time": "12 PM", "facilitator": "Zeldin",   "score":  0.9},
-    {"activity": "SLA291",   "room": "Loft 310",   "time": "1 PM",  "facilitator": "Singer",   "score":  0.3},
-    {"activity": "SLA303",   "room": "Beach 201",  "time": "10 AM", "facilitator": "Glen",     "score": -0.2},
-    {"activity": "SLA304",   "room": "Slater 003", "time": "11 AM", "facilitator": "Uther",    "score":  0.4},
-    {"activity": "SLA394",   "room": "Roman 216",  "time": "2 PM",  "facilitator": "Tyler",    "score":  0.7},
-    {"activity": "SLA449",   "room": "Beach 301",  "time": "1 PM",  "facilitator": "Zeldin",   "score":  0.2},
-    {"activity": "SLA451",   "room": "Frank 119",  "time": "3 PM",  "facilitator": "Lock",     "score":  1.1},
-]
-
-FAKE_METRICS = {
-    "generation":   42,
-    "best":         6.84,
-    "avg":          4.21,
-    "worst":        1.03,
-    "improvement":  2.47,
-    "lam":          0.01,
-    "population":   250,
-    "room_conflicts":      2,
-    "facilitator_overload": 1,
-    "size_violations":     3,
-    "converged":    False,
-}
-
-# Generate a fake fitness history curve
-def _fake_history(n=42):
-    history = []
-    best, avg, worst = -4.0, -6.0, -9.0
-    for i in range(n):
-        t = i / max(n - 1, 1)
-        ease = 1 - math.exp(-4 * t)
-        history.append((
-            -4.0 + ease * 10.8 + math.sin(i * 0.9) * 0.15,
-            -6.0 + ease * 10.2 + math.sin(i * 1.1) * 0.2,
-            -9.0 + ease * 10.0 + math.sin(i * 1.3) * 0.25,
-        ))
-    return history
-
-FAKE_HISTORY = _fake_history()
 
 
 # ── Helper drawing utilities ──────────────────────────────────────────────────
@@ -119,7 +83,6 @@ def draw_panel(surf, rect, title=None, title_icon=None):
     if title:
         hdr = pygame.Rect(rect.x, rect.y, rect.w, 28)
         pygame.draw.rect(surf, C["header"], hdr, border_radius=6)
-        # flat bottom edge on header
         pygame.draw.rect(surf, C["header"],
                          pygame.Rect(rect.x, rect.y + 14, rect.w, 14))
         pygame.draw.line(surf, C["panel_border"],
@@ -128,13 +91,18 @@ def draw_panel(surf, rect, title=None, title_icon=None):
         _draw_text(surf, label, rect.x + 10, rect.y + 6, "sm", C["text_dim"])
 
 
-def draw_button(surf, rect, label, style="normal", icon=None):
-    """Draw a styled button. style: normal | accent | disabled | danger"""
+def draw_button(surf, rect, label, style="normal", icon=None, hovered=False):
+    """
+    Draw a styled button.
+    style: normal | accent | disabled | danger
+    hovered: when True, lightens the background to indicate mouse-over.
+    Hover has no effect on disabled buttons.
+    """
     color_map = {
-        "normal":   C["btn"],
-        "accent":   C["btn_accent"],
-        "disabled": C["btn_disabled"],
-        "danger":   (120, 40, 40),
+        "normal":   C["btn_hover"]        if hovered else C["btn"],
+        "accent":   C["btn_accent_hover"] if hovered else C["btn_accent"],
+        "disabled": C["btn_disabled"],    # never highlighted
+        "danger":   (150, 50, 50)         if hovered else (120, 40, 40),
     }
     text_color = C["text_dim"] if style == "disabled" else C["btn_text"]
     bg = color_map.get(style, C["btn"])
@@ -153,11 +121,6 @@ def draw_seed_input(surf, rect, seed_val):
                C["text"], center_y=True)
 
 
-def _font(size="md"):
-    sizes = {"xs": 11, "sm": 13, "md": 15, "lg": 18, "xl": 22, "xxl": 28}
-    return pygame.font.SysFont("Segoe UI", sizes.get(size, 14))
-
-
 def _draw_text(surf, text, x, y, size="md", color=None, center=False,
                center_y=False, bold=False):
     color = color or C["text"]
@@ -171,8 +134,12 @@ def _draw_text(surf, text, x, y, size="md", color=None, center=False,
 
 # ── Panel renderers ───────────────────────────────────────────────────────────
 
-def render_control_bar(surf, state):
-    """Top control bar: seed input + all action buttons."""
+def render_control_bar(surf, state, mouse_pos):
+    """
+    Top control bar: seed input + all action buttons.
+    mouse_pos is passed in each frame to compute hover state per button.
+    Disabled buttons never show hover regardless of mouse position.
+    """
     pygame.draw.rect(surf, C["header"], CTRL_RECT)
     pygame.draw.line(surf, C["panel_border"],
                      (0, CTRL_BAR_H - 1), (WIN_W, CTRL_BAR_H - 1))
@@ -185,7 +152,6 @@ def render_control_bar(surf, state):
                center_y=True, bold=True)
     x += 110
 
-    # Divider
     pygame.draw.line(surf, C["divider"], (x, 8), (x, CTRL_BAR_H - 8))
     x += 12
 
@@ -196,26 +162,27 @@ def render_control_bar(surf, state):
     draw_seed_input(surf, seed_rect, state.get("seed", 42))
     x += 80
 
-    # Randomize button
-    rand_rect = pygame.Rect(x, cy - 13, 88, 26)
-    draw_button(surf, rand_rect, "Randomize", style="normal", icon="⟳")
+    # Randomize — disabled while GA is running
+    rand_style   = "disabled" if state.get("running") else "normal"
+    rand_hovered = rand_style != "disabled" and BUTTONS["randomize"].collidepoint(mouse_pos)
+    draw_button(surf, BUTTONS["randomize"], "Randomize",
+                style=rand_style, icon="⟳", hovered=rand_hovered)
     x += 96
 
-    # Divider
     pygame.draw.line(surf, C["divider"], (x, 8), (x, CTRL_BAR_H - 8))
     x += 12
 
-    # Generate button — always available
-    gen_rect = pygame.Rect(x, cy - 13, 160, 26)
-    draw_button(surf, gen_rect, "Generate Population", style="accent", icon="▶")
+    # Generate Population — accent before first population, disabled after
+    gen_style   = "disabled" if state.get("populated") else "accent"
+    gen_hovered = gen_style != "disabled" and BUTTONS["generate"].collidepoint(mouse_pos)
+    draw_button(surf, BUTTONS["generate"], "Generate Population",
+                style=gen_style, icon="▶", hovered=gen_hovered)
     x += 168
 
-    # Divider
     pygame.draw.line(surf, C["divider"], (x, 8), (x, CTRL_BAR_H - 8))
     x += 12
 
-    # Generations input label
-    run_style = "normal" if state.get("populated") else "disabled"
+    # Gens label + input
     _draw_text(surf, "Gens:", x, cy, "sm", C["text_dim"], center_y=True)
     x += 40
     gens_rect = pygame.Rect(x, cy - 12, 48, 24)
@@ -228,34 +195,35 @@ def render_control_bar(surf, state):
                center_y=True)
     x += 56
 
-    # Run button
-    run_rect = pygame.Rect(x, cy - 13, 110, 26)
-    draw_button(surf, run_rect, "Run Generations", style=run_style, icon="▶▶")
+    # Run Generations — disabled until populated and not already running
+    can_run     = state.get("populated") and not state.get("running") and not state.get("converged")
+    run_style   = "normal" if can_run else "disabled"
+    run_hovered = run_style != "disabled" and BUTTONS["run"].collidepoint(mouse_pos)
+    draw_button(surf, BUTTONS["run"], "Run Generations",
+                style=run_style, icon="▶▶", hovered=run_hovered)
     x += 118
 
-    # Divider
     pygame.draw.line(surf, C["divider"], (x, 8), (x, CTRL_BAR_H - 8))
     x += 12
 
-    # Export buttons
-    exp_style = "normal" if state.get("converged") else "disabled"
-    exp_rect = pygame.Rect(x, cy - 13, 118, 26)
-    draw_button(surf, exp_rect, "Export Schedule", style=exp_style, icon="↓")
-    x += 126
-    csv_rect = pygame.Rect(x, cy - 13, 104, 26)
-    draw_button(surf, csv_rect, "Export CSV", style=exp_style, icon="↓")
+    # Export buttons — only active after convergence
+    exp_style        = "normal" if state.get("converged") else "disabled"
+    sched_hovered    = exp_style != "disabled" and BUTTONS["export_sched"].collidepoint(mouse_pos)
+    csv_hovered      = exp_style != "disabled" and BUTTONS["export_csv"].collidepoint(mouse_pos)
+    draw_button(surf, BUTTONS["export_sched"], "Export Schedule",
+                style=exp_style, icon="↓", hovered=sched_hovered)
+    draw_button(surf, BUTTONS["export_csv"], "Export CSV",
+                style=exp_style, icon="↓", hovered=csv_hovered)
 
 
 def render_chart(surf, state):
     """Fitness line chart: best (green), avg (blue), worst (red)."""
     draw_panel(surf, CHART_RECT, title="Fitness Over Generations", title_icon="📈")
 
-    # ── Legend in the panel header bar, right-aligned ─────────────────────────
-    # Each legend item occupies a fixed 68px slot: [8 gap][18 line][6 gap][text][8 gap]
     legend_items = [("Best", C["chart_best"]),
                     ("Avg",  C["chart_avg"]),
                     ("Worst",C["chart_worst"])]
-    LEGEND_SLOT = 72          # fixed px per legend item
+    LEGEND_SLOT = 72
     header_cy = CHART_RECT.y + 14
     for i, (label, color) in enumerate(reversed(legend_items)):
         slot_right = CHART_RECT.right - 10 - i * LEGEND_SLOT
@@ -264,8 +232,6 @@ def render_chart(surf, state):
         pygame.draw.line(surf, color, (line_x1, header_cy), (line_x2, header_cy), 2)
         _draw_text(surf, label, line_x2 + 5, header_cy, "xs", color, center_y=True)
 
-    # ── Chart inner area ──────────────────────────────────────────────────────
-    # top margin 38px clears header bar; bottom margin 20px fits x-axis labels
     inner = pygame.Rect(
         CHART_RECT.x + 52,
         CHART_RECT.y + 38,
@@ -289,7 +255,6 @@ def render_chart(surf, state):
         gy = inner.bottom - int((val - mn) / span_y * inner.h)
         return gx, gy
 
-    # Grid lines + y-axis labels
     for tick in range(5):
         val = mn + tick / 4 * span_y
         gy = inner.bottom - int(tick / 4 * inner.h)
@@ -297,12 +262,10 @@ def render_chart(surf, state):
         _draw_text(surf, f"{val:+.1f}", inner.x - 46, gy, "xs",
                    C["text_muted"], center_y=True)
 
-    # X-axis labels — 4px below inner bottom, fully within panel
     _draw_text(surf, "0", inner.x, inner.bottom + 4, "xs", C["text_muted"])
     _draw_text(surf, f"Gen {n}", inner.right - 30, inner.bottom + 4,
                "xs", C["text_muted"])
 
-    # Draw series lines
     for series_idx, (_, color) in enumerate([
         (0, C["chart_best"]), (1, C["chart_avg"]), (2, C["chart_worst"])
     ]):
@@ -313,7 +276,7 @@ def render_chart(surf, state):
 
 
 def render_schedule(surf, state):
-    """Schedule panel: table of all 11 activities."""
+    """Schedule panel: table of activities, toggled between 6 and all 11."""
     draw_panel(surf, SCHED_RECT, title="Best Schedule", title_icon="📋")
 
     schedule = state.get("schedule", [])
@@ -323,7 +286,8 @@ def render_schedule(surf, state):
                    "sm", C["text_muted"], center=True)
         return
 
-    # Column layout inside panel
+    display = schedule if state.get("show_all_activities") else schedule[:6]
+
     inner_x = SCHED_RECT.x + 10
     inner_y = SCHED_RECT.y + 36
     inner_w = SCHED_RECT.w - 20
@@ -337,17 +301,19 @@ def render_schedule(surf, state):
         ("Score",        60),
     ]
 
-    # Header row
     cx = inner_x
     for label, w in cols:
         _draw_text(surf, label, cx + 6, inner_y, "sm", C["text_dim"], bold=True)
         cx += w
+
+    hint = "showing all 11  [T]" if state.get("show_all_activities") else "showing 6 of 11  [T]"
+    _draw_text(surf, hint, SCHED_RECT.right - 140, inner_y, "xs", C["text_muted"])
+
     inner_y += 22
     pygame.draw.line(surf, C["panel_border"],
                      (inner_x, inner_y), (inner_x + inner_w, inner_y))
     inner_y += 6
 
-    display = schedule if state.get("show_all_activities") else schedule[:6]
     for i, row in enumerate(display):
         if inner_y + row_h > SCHED_RECT.bottom - 6:
             break
@@ -381,10 +347,9 @@ def render_metrics(surf, state):
     def row(label, value, val_color=None):
         nonlocal my
         _draw_text(surf, label, mx, my, "sm", C["text_dim"], center_y=True)
-        # measure and right-align value — erase rect must stop 2px inside border
         font = pygame.font.SysFont("Segoe UI", 13)
         val_w = font.size(str(value))[0]
-        erase_right = METRICS_RECT.right - 2   # stay inside the 1px border
+        erase_right = METRICS_RECT.right - 2
         surf.fill(C["panel"], (erase_right - val_w - 16, my - 8,
                                val_w + 14, 16))
         _draw_text(surf, str(value), erase_right - val_w - 2, my,
@@ -401,7 +366,7 @@ def render_metrics(surf, state):
         nonlocal my
         my += 6
         _draw_text(surf, label, mx, my, "sm", C["accent"], bold=True)
-        my += 28   # increased from 20 → 28 to give title more breathing room
+        my += 28
 
     if not state.get("populated"):
         _draw_text(surf, "No data yet.",
@@ -412,25 +377,25 @@ def render_metrics(surf, state):
     m = state.get("metrics", {})
 
     section("GA STATUS")
-    row("Generation",   m.get("generation", 0))
-    row("Population",   m.get("population", 250))
-    row("Mutation λ",   f"{m.get('lam', 0.01):.4f}")
+    row("Generation",  m.get("generation", 0))
+    row("Population",  m.get("population", 250))
+    row("Mutation λ",  f"{m.get('lam', 0.01):.4f}")
     divider()
 
     section("FITNESS")
-    row("Best",         f"{m.get('best', 0):.4f}",  C["green"])
-    row("Average",      f"{m.get('avg', 0):.4f}",   C["chart_avg"])
-    row("Worst",        f"{m.get('worst', 0):.4f}", C["red"])
-    row("Improvement",  f"{m.get('improvement', 0):.2f}%",
+    row("Best",        f"{m.get('best', 0):.4f}",  C["green"])
+    row("Average",     f"{m.get('avg', 0):.4f}",   C["chart_avg"])
+    row("Worst",       f"{m.get('worst', 0):.4f}", C["red"])
+    row("Improvement", f"{m.get('improvement', 0):.2f}%",
         C["green"] if m.get("improvement", 0) < 1.0 else C["yellow"])
     divider()
 
     section("VIOLATIONS")
-    row("Room Conflicts",      m.get("room_conflicts", 0),
+    row("Room Conflicts",       m.get("room_conflicts", 0),
         C["violation"] if m.get("room_conflicts", 0) > 0 else C["green"])
     row("Facilitator Overload", m.get("facilitator_overload", 0),
         C["violation"] if m.get("facilitator_overload", 0) > 0 else C["green"])
-    row("Size Violations",     m.get("size_violations", 0),
+    row("Size Violations",      m.get("size_violations", 0),
         C["violation"] if m.get("size_violations", 0) > 0 else C["green"])
     divider()
 
@@ -445,9 +410,8 @@ def render_status_bar(surf, state):
     pygame.draw.line(surf, C["panel_border"],
                      (0, STATUS_RECT.y), (WIN_W, STATUS_RECT.y))
 
-    # Status indicator
     if not state.get("populated"):
-        status_text = "●  Idle — generate a population to begin"
+        status_text = "●  Idle — press [G] or click Generate Population to begin"
         status_color = C["neutral"]
     elif state.get("converged"):
         status_text = "●  Converged ✓ — stopping condition met"
@@ -459,81 +423,22 @@ def render_status_bar(surf, state):
     _draw_text(surf, status_text, 12, STATUS_RECT.centery,
                "xs", status_color, center_y=True)
 
-    # Keyboard hints right-aligned
-    hints = "[SPACE] Pause   [R] Reset   [+/-] Adjust λ   [T] Toggle rows"
-    hw = sum(pygame.font.SysFont("Segoe UI", 11).size(hints)[0] for _ in [1])
-    _draw_text(surf, hints, WIN_W - 12 - pygame.font.SysFont("Segoe UI", 11).size(hints)[0],
+    hints = "[G] Generate   [SPACE] Pause   [T] Toggle rows   [R] Reset   [+/-] Adjust λ"
+    _draw_text(surf, hints,
+               WIN_W - 12 - pygame.font.SysFont("Segoe UI", 11).size(hints)[0],
                STATUS_RECT.centery, "xs", C["text_muted"], center_y=True)
 
 
 # ── Main render entry point ───────────────────────────────────────────────────
 
-def render(surf, state):
+def render(surf, state, mouse_pos):
     """
     Render all panels. Called once per frame from main.py.
-
-    state dict keys (all optional in wireframe):
-        populated   : bool   — has initial population been generated?
-        converged   : bool   — has stopping condition been met?
-        seed        : int    — current RNG seed
-        run_gens    : int    — number of generations for next Run press
-        schedule    : list   — list of activity dicts (see FAKE_SCHEDULE)
-        metrics     : dict   — GA metrics (see FAKE_METRICS)
-        history     : list   — list of (best, avg, worst) tuples per generation
+    mouse_pos: current (x, y) from pygame.mouse.get_pos(), used for hover state.
     """
     surf.fill(C["bg"])
-    render_control_bar(surf, state)
+    render_control_bar(surf, state, mouse_pos)
     render_chart(surf, state)
     render_schedule(surf, state)
     render_metrics(surf, state)
     render_status_bar(surf, state)
-
-
-# ── Standalone test (run gui.py directly to preview) ─────────────────────────
-
-if __name__ == "__main__":
-    pygame.init()
-    screen = pygame.display.set_mode((WIN_W, WIN_H))
-    pygame.display.set_caption(TITLE)
-    clock = pygame.time.Clock()
-
-    # Cycle through states with SPACE to demo neutral → populated → converged
-    STATES = [
-        # State 0: neutral / idle
-        {"populated": False, "converged": False, "seed": 42, "run_gens": 100,
-         "schedule": [], "metrics": {}, "history": []},
-        # State 1: populated, running
-        {"populated": True,  "converged": False, "seed": 42, "run_gens": 100,
-         "schedule": FAKE_SCHEDULE, "metrics": FAKE_METRICS,
-         "history": FAKE_HISTORY},
-        # State 2: converged
-        {**{"populated": True, "converged": True, "seed": 42, "run_gens": 100,
-            "schedule": FAKE_SCHEDULE,
-            "metrics": {**FAKE_METRICS, "generation": 187, "improvement": 0.43,
-                        "best": 7.92, "avg": 5.88, "worst": 2.14,
-                        "room_conflicts": 0, "facilitator_overload": 0,
-                        "size_violations": 1}},
-         "history": _fake_history(187)},
-    ]
-    state_idx = 0
-
-    print("GA Scheduler Wireframe")
-    print("  SPACE → cycle through UI states (Idle → Running → Converged)")
-    print("  ESC / close window → quit")
-
-    running = True
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
-                if event.key == pygame.K_SPACE:
-                    state_idx = (state_idx + 1) % len(STATES)
-
-        render(screen, STATES[state_idx])
-        pygame.display.flip()
-        clock.tick(FPS)
-
-    pygame.quit()
