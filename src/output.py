@@ -6,11 +6,14 @@ import datetime
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 
 #create directory if it does not already exist
-def _ensure_output_dir():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+def _ensure_output_dir():os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def save_schedule(schedule: list, generation: int, fitness: float,
-                  order: str = "time") -> str:
+def save_schedule(schedule: list, generation: int, fitness: float, order: str = "time") -> str:
+    """
+    write best schedule to output/best_schedule.txt
+    sorts by time slot index if order='time', or alphabetically if order='activity'
+    return absolute path of written file
+    """
     _ensure_output_dir()
     path = os.path.join(OUTPUT_DIR, "best_schedule.txt")
 
@@ -36,32 +39,60 @@ def save_schedule(schedule: list, generation: int, fitness: float,
     return path
 
 def export_csv(history: list, path: str = None) -> str:
-    raise NotImplementedError("export_csv() not yet implemented")
+    """
+    write per gen fitness history to output/fitness_history.csv
+    accepts list of (best, avg, worst) tuples or dicts
+    returns absolute path of the written file
+    """
+    _ensure_output_dir()
+    path = path or os.path.join(OUTPUT_DIR, "fitness_history.csv")
+
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["generation", "best", "avg", "worst", "improvement_pct"])
+        writer.writeheader()
+        for i, entry in enumerate(history):
+            if isinstance(entry, tuple):
+                best, avg, worst = entry
+                writer.writerow({
+                    "generation":      i + 1,
+                    "best":            round(best, 6),
+                    "avg":             round(avg, 6),
+                    "worst":           round(worst, 6),
+                    "improvement_pct": 0.0,
+                })
+            else:
+                writer.writerow({
+                    "generation":      entry.get("generation", i + 1),
+                    "best":            round(entry.get("best", 0.0), 6),
+                    "avg":             round(entry.get("avg", 0.0), 6),
+                    "worst":           round(entry.get("worst", 0.0), 6),
+                    "improvement_pct": round(entry.get("improvement", 0.0), 6),
+                })
+    return path
 
 #log writer
-def write_log(generation: int, best_fitness: float, schedule: list = None,
-              path: str = None) -> None:
-    raise NotImplementedError("write_log() not yet implemented")
+def write_log(generation: int, best_fitness: float, schedule: list = None, path: str = None) -> None:
+    """
+    append one timestamped entry to output/ga_run.log
+    if schedule is provided, writes each assignment as a compact row below the entry
+    opens in append mode so full run history is preserved
+    """
+    _ensure_output_dir()
+    path = path or os.path.join(OUTPUT_DIR, "ga_run.log")
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with open(path, "a") as f:
+        f.write(f"[{timestamp}]  Gen {generation:04d}  Best: {best_fitness:.4f}\n")
+        if schedule:
+            for row in schedule:
+                f.write(f"  {row['activity']:<12} {row['room']:<14} "
+                        f"{row['time']:<8} {row['facilitator']}\n")
 
 #smoke test
 if __name__ == "__main__":
     print("output.py loaded — stub signatures verified")
     print(f"Output directory target: {OUTPUT_DIR}")
     print()
-
-    stubs = [
-        ("export_csv",     lambda: export_csv([])),
-        ("write_log",      lambda: write_log(0, 0.0)),
-    ]
-
-    for name, call in stubs:
-        try:
-            call()
-            print(f"  [WARN] {name}() did not raise NotImplementedError — check stub body")
-        except NotImplementedError:
-            print(f"  [OK]   {name}() stub confirmed (raises NotImplementedError)")
-        except Exception as e:
-            print(f"  [WARN] {name}() raised unexpected error: {e}")
 
     print("[ save_schedule() ]")
     test_schedule = [
@@ -70,6 +101,21 @@ if __name__ == "__main__":
     ]
     path = save_schedule(test_schedule, generation=1, fitness=1.3)
     print(f"  [OK]   written to {path}")
+    print()
+
+    #export test
+    print("[ export_csv() ]")
+    test_history = [(4.2, 1.1, -2.3), (4.8, 1.5, -1.9), (5.1, 1.8, -1.5)]
+    csv_path = export_csv(test_history)
+    print(f"  [OK]   written to {csv_path}")
+    print()
+
+    #log test
+    print("[ write_log() ]")
+    write_log(generation=1, best_fitness=4.2)
+    write_log(generation=2, best_fitness=4.8)
+    log_path = os.path.join(OUTPUT_DIR, "ga_run.log")
+    print(f"  [OK]   written to {log_path}")
     print()
 
     print()
