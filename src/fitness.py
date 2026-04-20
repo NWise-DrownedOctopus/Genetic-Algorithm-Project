@@ -432,7 +432,8 @@ if __name__ == "__main__":
     # Test 8 — Tyler 2 non-consecutive
     # Rule2 = +1.6
     # Rule3 = -0.2
-    # Rule4 = +0.4 - 0.8 = -0.4   (ft=1 each: +0.2+0.2, Tyler total=2: -0.4 each)    # Rule5 = 0
+    # Rule4 = +0.4 - 0.8 = -0.4   (ft=1 each: +0.2+0.2, Tyler total=2: -0.4 each)    
+    # Rule5 = 0
     # Total = 1.0
     a1 = Assignment(act("A"), "Roman 201", "10 AM", "Tyler")
     a2 = Assignment(act("B"), "Roman 201", "12 PM", "Tyler")
