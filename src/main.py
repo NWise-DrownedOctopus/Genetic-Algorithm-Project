@@ -40,7 +40,7 @@ from gui import (
     render, BUTTONS, INPUTS,
 )
 from schedule import initialize_population
-from fitness import score_schedule, count_violations
+from fitness import score_schedule, count_violations, score_per_assignment
 from ga import run_generation, halve_mutation_rate
 
 
@@ -161,15 +161,17 @@ def generate_population(state):
 
     violations = count_violations(best_schedule)
 
+    per_scores = score_per_assignment(best_schedule)
+
     schedule_display = [
         {
             "activity":    a.activity["name"],
             "room":        a.room,
             "time":        a.time,
             "facilitator": a.facilitator,
-            "score":       0.0,
+            "score":       scores[i],
         }
-        for a in best_schedule.assignments
+        for i, a in enumerate(best_schedule.assignments)
     ]
 
     metrics = {
@@ -251,15 +253,17 @@ def advance_generation(state):
 
     violations = count_violations(best_schedule)
 
+    per_scores = score_per_assignment(best_schedule)
+
     schedule_display = [
         {
             "activity":    a.activity["name"],
             "room":        a.room,
             "time":        a.time,
             "facilitator": a.facilitator,
-            "score":       0.0,
+            "score":       per_scores[i],
         }
-        for a in best_schedule.assignments
+        for i, a in enumerate(best_schedule.assignments)
     ]
 
     gen         = state["generation"] + 1
