@@ -189,6 +189,161 @@ def count_violations(schedule):
         "size_violations": size_violations
     }
 
+def score_per_assignment(schedule: Schedule) -> list[float]:
+    scores = [0.0 for _ in schedule.assignments]
+    assignments = schedule.assignments
+
+    # Rule 1 — Room conflict (split)
+    for i in range(len(assignments)):
+        for j in range(i + 1, len(assignments)):
+            a1 = assignments[i]
+            a2 = assignments[j]
+            if a1.room == a2.room and a1.time == a2.time:
+                scores[i] -= 0.5
+                scores[j] -= 0.5
+
+    # Rule 2 — Room size (full)
+    for i, a in enumerate(assignments):
+        capacity = ROOMS[a.room]
+        enrollment = a.activity["enrollment"]
+        ratio = enrollment / capacity
+
+        if ratio > 1.0:
+            scores[i] -= 1.0
+        elif 0.83 <= ratio <= 1.0:
+            scores[i] += 0.8
+        elif 0.75 <= ratio < 0.83:
+            scores[i] += 0.5
+        elif 0.67 <= ratio < 0.75:
+            scores[i] += 0.2
+        elif 0.50 <= ratio < 0.67:
+            scores[i] -= 0.3
+        else:
+            scores[i] -= 0.6
+
+    # Rule 3 — Facilitator type (full)
+    for i, a in enumerate(assignments):
+        facilitator = a.facilitator
+        preferred = a.activity["preferred"]
+        other = a.activity["other"]
+
+        if facilitator in preferred:
+            scores[i] += 0.5
+        elif facilitator in other:
+            scores[i] += 0.2
+        else:
+            scores[i] -= 0.1
+
+    # Precompute counts
+    fac_time_count = {}
+    fac_total_count = {}
+
+    for a in assignments:
+        key = (a.facilitator, a.time)
+        fac_time_count[key] = fac_time_count.get(key, 0) + 1
+        fac_total_count[a.facilitator] = fac_total_count.get(a.facilitator, 0) + 1
+
+    time_index = {t: i for i, t in enumerate(TIMES)}
+
+    # Rule 4 — Facilitator load (full)
+    for i, a in enumerate(assignments):
+        ft = fac_time_count[(a.facilitator, a.time)]
+        total_count = fac_total_count[a.facilitator]
+
+        if ft == 1:
+            scores[i] += 0.2
+        elif ft > 1:
+            scores[i] -= 0.2
+
+        if total_count > 4:
+            scores[i] -= 0.5
+        elif a.facilitator == "Tyler":
+            if 2 <= total_count < 3:
+                scores[i] -= 0.4
+        else:
+            if total_count < 3:
+                scores[i] -= 0.4
+
+    # Helper
+    def is_rb(room):
+        return room.startswith("Roman") or room.startswith("Beach")
+
+    # Rule 5 — Consecutive (split)
+    for i in range(len(assignments)):
+        for j in range(i + 1, len(assignments)):
+            a1 = assignments[i]
+            a2 = assignments[j]
+            if a1.facilitator == a2.facilitator:
+                if abs(time_index[a1.time] - time_index[a2.time]) == 1:
+                    scores[i] += 0.25
+                    scores[j] += 0.25
+                    if is_rb(a1.room) != is_rb(a2.room):
+                        scores[i] -= 0.2
+                        scores[j] -= 0.2
+
+    # Helper to find index
+    def find_idx(name):
+        for idx, a in enumerate(assignments):
+            if a.activity["name"] == name:
+                return idx
+        return None
+
+    # Rule 6 — SLA101A/B (split)
+    i1 = find_idx("SLA101A")
+    i2 = find_idx("SLA101B")
+    if i1 is not None and i2 is not None:
+        diff = abs(time_index[assignments[i1].time] - time_index[assignments[i2].time])
+        if diff == 0:
+            scores[i1] -= 0.25
+            scores[i2] -= 0.25
+        elif diff >= 5:
+            scores[i1] += 0.25
+            scores[i2] += 0.25
+
+    # Rule 7 — SLA191A/B (split)
+    i1 = find_idx("SLA191A")
+    i2 = find_idx("SLA191B")
+    if i1 is not None and i2 is not None:
+        diff = abs(time_index[assignments[i1].time] - time_index[assignments[i2].time])
+        if diff == 0:
+            scores[i1] -= 0.25
+            scores[i2] -= 0.25
+        elif diff >= 5:
+            scores[i1] += 0.25
+            scores[i2] += 0.25
+
+    # Rule 8 — Cross-section (split)
+    a101a = find_idx("SLA101A")
+    a101b = find_idx("SLA101B")
+    a191a = find_idx("SLA191A")
+    a191b = find_idx("SLA191B")
+
+    pairs = [
+        (a101a, a191a),
+        (a101a, a191b),
+        (a101b, a191a),
+        (a101b, a191b),
+    ]
+
+    for p1, p2 in pairs:
+        if p1 is not None and p2 is not None:
+            diff = abs(time_index[assignments[p1].time] - time_index[assignments[p2].time])
+
+            if diff == 0:
+                scores[p1] -= 0.125
+                scores[p2] -= 0.125
+            elif diff == 1:
+                scores[p1] += 0.25
+                scores[p2] += 0.25
+                if is_rb(assignments[p1].room) != is_rb(assignments[p2].room):
+                    scores[p1] -= 0.2
+                    scores[p2] -= 0.2
+            elif diff == 2:
+                scores[p1] += 0.125
+                scores[p2] += 0.125
+
+    return scores
+
 
 if __name__ == "__main__":
     def check(name, result, expected):
