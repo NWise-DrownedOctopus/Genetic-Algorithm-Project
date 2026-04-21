@@ -1,16 +1,16 @@
 """
 main.py — CS 461 Program 2: Genetic Algorithm Scheduler
-Nicholas Wise ownership.
+Member C ownership.
 
 Entry point.
 
 Application architecture:
-    main.py   — owns the game loop and application state dict.
-    gui.py    — owns all rendering; receives state and mouse_pos, draws it.
-    fitness.py - owns all scoring calculation.
-    schedule.py - owns creating of random schedules to initilize project.
-    ga.py     — owns the GA algorithm; called by advance_generation each frame.
-    output.py — owns file export; called on user request after convergence.
+    main.py     — owns the game loop and application state dict.
+    gui.py      — owns all rendering; receives state and mouse_pos, draws it.
+    fitness.py  — owns all scoring calculation.
+    schedule.py — owns creating of random schedules to initialise the project.
+    ga.py       — owns the GA algorithm; called by advance_generation each frame.
+    output.py   — owns file export; called on user request after convergence.
 
 State flow:
     make_initial_state() → state dict
@@ -34,12 +34,13 @@ Mouse:
 """
 
 import pygame
+import output
 from gui import (
     WIN_W, WIN_H, FPS, TITLE,
     render, BUTTONS, INPUTS,
 )
 from schedule import initialize_population
-from fitness import score_schedule
+from fitness import score_schedule, count_violations
 from ga import run_generation, halve_mutation_rate
 
 
@@ -158,13 +159,15 @@ def generate_population(state):
     best_schedule = population[best_idx]
     average_score = sum(scores) / len(scores)
 
+    violations = count_violations(best_schedule)
+
     schedule_display = [
         {
             "activity":    a.activity["name"],
             "room":        a.room,
             "time":        a.time,
             "facilitator": a.facilitator,
-            "score":       0.0,   # per-assignment scores not yet tracked; placeholder
+            "score":       0.0,
         }
         for a in best_schedule.assignments
     ]
@@ -177,9 +180,9 @@ def generate_population(state):
         "avg":                  average_score,
         "worst":                min(scores),
         "improvement":          0.0,
-        "room_conflicts":       0,
-        "facilitator_overload": 0,
-        "size_violations":      0,
+        "room_conflicts":       violations["room_conflicts"],
+        "facilitator_overload": violations["facilitator_overload"],
+        "size_violations":      violations["size_violations"],
     }
 
     state["population"]  = population
@@ -226,10 +229,6 @@ def advance_generation(state):
         state["lam"] is the single source of truth; metrics["lam"] is synced
         from it rather than the other way around.
 
-    Violation counts (room_conflicts, facilitator_overload, size_violations)
-    are carried forward from the previous generation until Member A wires
-    live values into the state dict.
-
     Args:
         state: application state dict; modified in place and returned.
 
@@ -250,6 +249,8 @@ def advance_generation(state):
     best_idx      = new_scores.index(max(new_scores))
     best_schedule = next_gen[best_idx]
 
+    violations = count_violations(best_schedule)
+
     schedule_display = [
         {
             "activity":    a.activity["name"],
@@ -268,13 +269,12 @@ def advance_generation(state):
     if converged and not state["converged"]:
         state["lam"] = halve_mutation_rate(state["lam"])
 
-    prev_metrics = state.get("metrics", {})
     metrics.update({
         "population":           len(next_gen),
         "lam":                  state["lam"],
-        "room_conflicts":       prev_metrics.get("room_conflicts", 0),
-        "facilitator_overload": prev_metrics.get("facilitator_overload", 0),
-        "size_violations":      prev_metrics.get("size_violations", 0),
+        "room_conflicts":       violations["room_conflicts"],
+        "facilitator_overload": violations["facilitator_overload"],
+        "size_violations":      violations["size_violations"],
     })
 
     state["population"]  = next_gen
@@ -285,31 +285,63 @@ def advance_generation(state):
     state["metrics"]     = metrics
     state["history"].append((metrics["best"], metrics["avg"], metrics["worst"]))
 
+    # Write a log entry every generation so the full run history is preserved.
+    output.write_log(
+        generation=gen,
+        best_fitness=metrics["best"],
+        schedule=schedule_display if converged else None,
+    )
+
     return state
 
 
-# ── Export stubs ───────────────────────────────────────────────────────────────
+# ── Export functions ───────────────────────────────────────────────────────────
 
-def stub_export_schedule():
+def export_schedule(state):
     """
-    Placeholder for schedule file export.
+    Write the best schedule from the current converged run to a text file.
 
-    Will be replaced with a call to output.save_schedule(state["schedule"])
-    once Member B implements output.py. Only reachable via UI after convergence.
+    Delegates to output.save_schedule(), passing the schedule list, the
+    current generation number, and the best fitness score from metrics.
+    Also appends a final timestamped entry to the run log via write_log().
 
+    Only callable after convergence (enforced by the button guard in
+    handle_events). Prints the saved file path to the terminal for
+    confirmation.
+
+    Args:
+        state: application state dict; read-only inside this function.
     """
-    print("[STUB] Would export schedule to output/best_schedule.txt")
+    path = output.save_schedule(
+        schedule=state["schedule"],
+        generation=state["generation"],
+        fitness=state["metrics"]["best"],
+        order="time",
+    )
+    output.write_log(
+        generation=state["generation"],
+        best_fitness=state["metrics"]["best"],
+        schedule=state["schedule"],
+    )
+    print(f"[Export] Schedule saved → {path}")
 
 
-def stub_export_csv():
+def export_csv(state):
     """
-    Placeholder for fitness history CSV export.
+    Write the full per-generation fitness history to a CSV file.
 
-    Will be replaced with a call to output.export_csv(state["history"])
-    once Member B implements output.py. Only reachable via UI after convergence.
+    Delegates to output.export_csv(), passing state["history"] which is a
+    list of (best, avg, worst) tuples accumulated across all generations.
 
+    Only callable after convergence (enforced by the button guard in
+    handle_events). Prints the saved file path to the terminal for
+    confirmation.
+
+    Args:
+        state: application state dict; read-only inside this function.
     """
-    print("[STUB] Would export fitness history to output/fitness_history.csv")
+    path = output.export_csv(history=state["history"])
+    print(f"[Export] Fitness history saved → {path}")
 
 
 # ── Event handling ─────────────────────────────────────────────────────────────
@@ -387,11 +419,11 @@ def handle_events(events, state):
 
                 if BUTTONS["export_sched"].collidepoint(pos):
                     if state["converged"]:
-                        stub_export_schedule(state)
+                        export_schedule(state)
 
                 if BUTTONS["export_csv"].collidepoint(pos):
                     if state["converged"]:
-                        stub_export_csv(state)
+                        export_csv(state)
 
         # ── Keyboard ──────────────────────────────────────────────────────────
         if event.type == pygame.KEYDOWN:
@@ -462,7 +494,6 @@ def main():
         3. If the GA is running and not paused, advance one generation.
         4. Render the current state to the screen.
         5. Cap the frame rate at FPS (60).
-        
     """
     pygame.init()
     screen = pygame.display.set_mode((WIN_W, WIN_H))
